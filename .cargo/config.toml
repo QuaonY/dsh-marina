@@ -1,0 +1,8 @@
+# Static-link the MSVC C runtime into the binary.
+#
+# The release exe is shipped on its own, so it must not need
+# VCRUNTIME140.dll / MSVCP140.dll from the Visual C++ Redistributable.
+# Everything else it imports (kernel32, d3d11, dwrite, secur32, …) ships
+# with Windows itself.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
