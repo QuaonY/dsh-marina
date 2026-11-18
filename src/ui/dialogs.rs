@@ -1737,8 +1737,9 @@ impl MarinaWindow {
         let following = dialog.current == LATEST_STABLE;
         let follow_selected = selected.as_deref() == Some(LATEST_STABLE);
         let current = match dialog.current.as_str() {
-            LATEST_STABLE => local_versions.first().map(|choice| choice.version.clone()),
-            EXTERNAL_RUNTIME_ID => None,
+            // While following "latest stable" the binding row below carries the
+            // "in use" chip, so no version row claims it as well.
+            LATEST_STABLE | EXTERNAL_RUNTIME_ID => None,
             _ => Some(dialog.current.clone()),
         };
         let binding_note = if following {
