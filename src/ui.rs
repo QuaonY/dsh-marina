@@ -1,4 +1,4 @@
-//! Main window rendering, styled after `DSH Marina 设计方案/design/ui-preview.html`.
+//! Main window rendering and shared widget helpers.
 
 mod dialogs;
 mod market;
@@ -15,7 +15,7 @@ use dsh_marina::instances::{AgentsHomeMode, InstancePaths, OriginKind};
 use dsh_marina::plugins::PluginInfo;
 use dsh_marina::snapshots::SnapshotInfo;
 
-// Light theme tokens from ui-preview.html.
+// Light theme tokens shared by every screen.
 const BG: u32 = 0xfafbfc;
 const BG_CARD: u32 = 0xffffff;
 const BG_ELEVATED: u32 = 0xf8f9fa;
