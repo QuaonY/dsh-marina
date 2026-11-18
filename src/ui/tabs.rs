@@ -114,6 +114,14 @@ impl MarinaWindow {
                 cx.notify();
             }),
         ));
+        if instance.runtime.previous_binding.is_some() {
+            let id = id.clone();
+            row = row.child(clickable(
+                btn("换回上一个运行时", Tone::Default, true),
+                true,
+                cx.listener(move |this, _, _, cx| this.revert_runtime(id.clone(), cx)),
+            ));
+        }
         row = row.child(clickable(
             btn("忽略", Tone::Default, true),
             true,
@@ -744,9 +752,50 @@ impl MarinaWindow {
             )
         };
 
+        let runtime_desc = if let Some(previous) = instance.runtime.previous_binding.as_deref() {
+            format!(
+                "程序版本；数据、插件和会话留在实例目录里。上次切换前是 {}，可以随时换回去",
+                runtime_label(previous)
+            )
+        } else {
+            "程序版本；数据、插件和会话留在实例目录里，切换不会搬动它们".to_owned()
+        };
         let mut form = card()
             .child(card_head("实例设置", div()))
             .child(form_row(true, "实例名称", "只影响启动器里的显示", rename))
+            .child(form_row(false, "DSH 运行时", &runtime_desc, {
+                let switch_id = id.clone();
+                let revert_id = id.clone();
+                let can_revert = instance.runtime.previous_binding.is_some();
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .font_family(MONO)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(runtime_label(&instance.runtime.dsh_version)),
+                    )
+                    .when(can_revert, |el| {
+                        el.child(clickable(
+                            btn("换回上一个运行时", Tone::Default, true),
+                            !locked,
+                            cx.listener(move |this, _, _, cx| {
+                                this.revert_runtime(revert_id.clone(), cx)
+                            }),
+                        ))
+                    })
+                    .child(clickable(
+                        btn("更换运行时…", Tone::Default, true),
+                        !locked,
+                        cx.listener(move |this, _, _, cx| {
+                            this.open_switch_runtime_dialog(switch_id.clone(), cx)
+                        }),
+                    ))
+                    .when(locked, |el| el.child(hint("停止实例后才能更换")))
+            }))
             .child(form_row(
                 false,
                 "图标、颜色与备注",

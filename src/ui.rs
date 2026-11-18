@@ -137,7 +137,7 @@ fn initial(name: &str) -> String {
         .to_string()
 }
 
-fn runtime_label(binding: &str) -> String {
+pub(crate) fn runtime_label(binding: &str) -> String {
     if binding == LATEST_STABLE {
         "最新稳定版".to_owned()
     } else if binding == EXTERNAL_RUNTIME_ID {
@@ -686,6 +686,7 @@ impl Render for MarinaWindow {
                         Dialog::ShareToCommunity { .. } => true,
                         Dialog::SharePack { busy, .. } => *busy,
                         Dialog::NewInstance(inner) => inner.busy,
+                        Dialog::SwitchRuntime(inner) => inner.busy,
                         Dialog::GitHubLogin { connecting, .. } => *connecting,
                         _ => false,
                     };

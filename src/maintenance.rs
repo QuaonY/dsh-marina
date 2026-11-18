@@ -66,7 +66,7 @@ fn trash_runtime(state: &AppState, runtime: &runtimes::RuntimeInfo) -> Result<St
     Ok(format!("已删除 DSH {}（已移到回收站）", runtime.version))
 }
 
-/// §7.8 批量改绑: move every instance pinned to `runtime_id` to `binding`
+/// §7.8 批量解绑: move every instance pinned to `runtime_id` to `binding`
 /// (a version, `latest-stable` or the original DSH), then delete the runtime.
 pub fn rebind_and_remove_runtime(
     state: &AppState,
@@ -95,7 +95,7 @@ pub fn rebind_and_remove_runtime(
         .filter(|i| runtimes::usage_count(std::slice::from_ref(*i), &runtime, newest) > 0)
         .collect();
     if let Some(busy) = affected.iter().find(|i| running.contains(&i.id)) {
-        return Err(format!("「{}」正在运行，请先停止再改绑", busy.name));
+        return Err(format!("「{}」正在运行，请先停止再解绑", busy.name));
     }
     let mut moved = 0;
     for instance in &affected {
@@ -103,7 +103,7 @@ pub fn rebind_and_remove_runtime(
             state
                 .repository
                 .set_runtime_binding(&instance.id, binding)
-                .map_err(|e| format!("改绑「{}」失败：{e}", instance.name))?;
+                .map_err(|e| format!("解绑「{}」失败：{e}", instance.name))?;
             moved += 1;
         }
     }
@@ -126,7 +126,7 @@ pub fn rebind_and_remove_runtime(
     }
     let removed = trash_runtime(state, &runtime)?;
     Ok(format!(
-        "已把 {moved} 个实例改绑到 {}；{removed}",
+        "已把 {moved} 个实例解绑，改用 {}；{removed}",
         crate_runtime_label(binding)
     ))
 }

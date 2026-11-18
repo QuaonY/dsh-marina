@@ -219,6 +219,7 @@ impl MarinaWindow {
         }
         let dialog = match self.dialog.as_ref()? {
             Dialog::NewInstance(dialog) => self.render_new_dialog(dialog, cx),
+            Dialog::SwitchRuntime(dialog) => self.render_switch_runtime_dialog(dialog, cx),
             Dialog::CreateSnapshot { reason, .. } => {
                 let reason = reason.clone();
                 let submit = clickable(
@@ -527,17 +528,17 @@ impl MarinaWindow {
                     )
                 });
                 dialog_shell(
-                    &format!("改绑后删除 DSH {version}"),
+                    &format!("解绑后删除 DSH {version}"),
                     DANGER,
                     560.,
                     body()
                         .child(paragraph(format!(
-                            "这些实例还在用 DSH {version}：{}。先把它们改到下面选的版本，再把 DSH {version} 移到回收站。跟随「最新稳定版」的实例会自动换到下一个最新版本。",
+                            "这些实例还在用 DSH {version}：{}。先把它们换到下面选的版本，再把 DSH {version} 移到回收站。跟随「最新稳定版」的实例会自动换到下一个最新版本。",
                             users.join("、")
                         )))
                         .child(div().flex().flex_col().gap(px(8.)).children(options)),
                     div().child(self.cancel_button(cx)).child(clickable(
-                        btn("改绑并删除", Tone::Danger, false),
+                        btn("解绑并删除", Tone::Danger, false),
                         binding.is_some(),
                         cx.listener(move |this, _, _, cx| {
                             if let Some(binding) = binding.clone() {
@@ -951,6 +952,7 @@ impl MarinaWindow {
             Some(Dialog::CloneInstance { .. }) => self.submit_clone_dialog(cx),
             Some(Dialog::Appearance { .. }) => self.submit_appearance(cx),
             Some(Dialog::NewInstance(_)) => self.submit_new_dialog(cx),
+            Some(Dialog::SwitchRuntime(_)) => self.submit_switch_runtime(cx),
             Some(Dialog::SharePack { .. }) => self.submit_share_pack(cx),
             _ => {}
         }
@@ -1716,6 +1718,360 @@ impl MarinaWindow {
                 .when_some(dialog.error.clone(), |el, error| {
                     el.child(error_text(error))
                 }),
+            div().child(self.cancel_button(cx)).child(submit),
+        )
+    }
+
+    /// 更换运行时：same data and plugins, another DSH version.
+    fn render_switch_runtime_dialog(
+        &self,
+        dialog: &SwitchRuntimeDialog,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (local_versions, remote_versions): (Vec<_>, Vec<_>) =
+            dialog.versions.iter().partition(|choice| choice.installed);
+        let selected = dialog.selected.clone();
+        let instance_id = dialog.instance_id.clone();
+        // "latest stable" is a binding of its own rather than a version, so it
+        // gets a row above the list and stays reachable after pinning a version.
+        let following = dialog.current == LATEST_STABLE;
+        let follow_selected = selected.as_deref() == Some(LATEST_STABLE);
+        let current = match dialog.current.as_str() {
+            LATEST_STABLE => local_versions.first().map(|choice| choice.version.clone()),
+            EXTERNAL_RUNTIME_ID => None,
+            _ => Some(dialog.current.clone()),
+        };
+        let binding_note = if following {
+            Some(
+                "这个实例现在跟随「最新稳定版」，会自动使用最新安装的版本；切换后它会固定到所选的版本。",
+            )
+        } else if dialog.current == EXTERNAL_RUNTIME_ID {
+            Some("这个实例现在使用原版 DSH；切换后它会改用 Marina 管理的运行时。")
+        } else {
+            None
+        };
+
+        let render_version_row = |choice: &&VersionChoice| {
+            let is_selected = selected.as_deref() == Some(choice.version.as_str());
+            let prerelease = choice
+                .remote
+                .as_ref()
+                .map_or(choice.version.contains('-'), |r| r.prerelease);
+            let date = choice
+                .remote
+                .as_ref()
+                .map(|r| r.release_date.chars().take(10).collect::<String>())
+                .unwrap_or_default();
+            let size = choice
+                .remote
+                .as_ref()
+                .and_then(|r| r.feed.as_ref())
+                .map(|f| storage::format_bytes(f.size));
+            let downloading = self
+                .download
+                .jobs
+                .iter()
+                .any(|j| j.key == format!("dsh:{}", choice.version));
+            let version = choice.version.clone();
+            let id = instance_id.clone();
+            clickable(
+                Hoverable::new(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(12.))
+                        .py(px(8.))
+                        .rounded(px(8.))
+                        .when(is_selected, |el| el.bg(rgb(PRIMARY_MUTED)))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_shrink_0()
+                                .size(px(16.))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .border_2()
+                                .border_color(rgb(if is_selected { PRIMARY } else { BORDER }))
+                                .when(is_selected, |el| {
+                                    el.child(div().size(px(6.)).rounded_full().bg(rgb(PRIMARY)))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .font_family(MONO)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(if is_selected { PRIMARY } else { TEXT }))
+                                .child(choice.version.clone()),
+                        )
+                        .child(if prerelease {
+                            chip("预发布", ChipTone::Warn)
+                        } else {
+                            chip("稳定版", ChipTone::Good)
+                        })
+                        .child(div().flex_1())
+                        .when(!date.is_empty(), |el| el.child(hint(date)))
+                        .child(if choice.installed {
+                            chip("本地可用", ChipTone::Good)
+                        } else if downloading {
+                            chip("下载中", ChipTone::Info)
+                        } else {
+                            chip(
+                                size.map_or("需下载".to_owned(), |s| format!("需下载 · {s}")),
+                                ChipTone::Off,
+                            )
+                        })
+                        .when(current.as_deref() == Some(choice.version.as_str()), |el| {
+                            el.child(chip("当前使用", ChipTone::Info))
+                        }),
+                    move |s| {
+                        if is_selected {
+                            s
+                        } else {
+                            s.bg(rgb(BG_ROW_HOVER))
+                        }
+                    },
+                ),
+                !dialog.busy,
+                cx.listener(move |this, _, _, cx| {
+                    let version = version.clone();
+                    let id = id.clone();
+                    let incompatible = this.incompatible_plugins(&id, Some(&version));
+                    if let Some(Dialog::SwitchRuntime(dialog)) = this.dialog.as_mut() {
+                        dialog.selected = Some(version);
+                        dialog.incompatible = incompatible;
+                        cx.notify();
+                    }
+                }),
+            )
+        };
+
+        let local_section = (!local_versions.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div().px(px(8.)).py(px(4.)).child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(SUCCESS))
+                            .child("✓ 本地已有运行时（无需下载）"),
+                    ),
+                )
+                .children(local_versions.iter().map(render_version_row))
+        });
+        let remote_section = (!remote_versions.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .when(local_section.is_some(), |el| {
+                    el.child(
+                        div()
+                            .h(px(1.))
+                            .mx(px(12.))
+                            .my(px(8.))
+                            .bg(rgb(BORDER_SUBTLE)),
+                    )
+                })
+                .child(
+                    div().px(px(8.)).py(px(4.)).child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(TEXT_2))
+                            .child("在线版本（需要下载）"),
+                    ),
+                )
+                .children(remote_versions.iter().map(render_version_row))
+        });
+        let status = if dialog.listing {
+            Some(hint("正在读取可用版本…"))
+        } else {
+            dialog.list_error.as_ref().map(|e| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(DANGER))
+                    .child(format!("读取版本列表失败：{e}"))
+            })
+        };
+        let empty = dialog.versions.is_empty() && !dialog.listing;
+        let warning = (!dialog.incompatible.is_empty()).then(|| {
+            div()
+                .mt(px(6.))
+                .text_size(px(12.))
+                .text_color(rgb(WARNING_TEXT))
+                .child(format!(
+                    "市场索引声明这些插件不支持所选版本：{}。切换不会删除它们，启动后如异常可在插件页禁用。",
+                    dialog.incompatible.join("、")
+                ))
+        });
+
+        let submit = clickable(
+            btn(
+                if dialog.busy {
+                    "正在切换…"
+                } else {
+                    "切换"
+                },
+                Tone::Primary,
+                false,
+            ),
+            !dialog.busy && dialog.selected.as_deref() != Some(dialog.current.as_str()),
+            cx.listener(|this, _, _, cx| this.submit_switch_runtime(cx)),
+        );
+
+        dialog_shell(
+            "更换运行时",
+            TEXT,
+            600.,
+            body()
+                .gap(px(14.))
+                .child(paragraph(
+                    "只更换 DSH 程序版本；实例的数据、插件、会话和登录状态都留在原处，不会移动或丢失。切换前会自动存一份配置快照。",
+                ))
+                .when_some(binding_note, |el, note| {
+                    el.child(
+                        div()
+                            .rounded(px(8.))
+                            .bg(rgba(PRIMARY_TINT_08))
+                            .border_1()
+                            .border_color(rgba(PRIMARY_TINT_25))
+                            .px(px(12.))
+                            .py(px(8.))
+                            .text_size(px(12.))
+                            .text_color(rgb(TEXT_2))
+                            .child(note),
+                    )
+                })
+                .child(div().flex().flex_wrap().gap(px(6.)).child(clickable(
+                    btn(if dialog.listing { "读取中…" } else { "刷新列表" }, Tone::Default, true),
+                    !dialog.listing,
+                    cx.listener(|this, _, _, cx| this.list_switch_versions(cx)),
+                )))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .max_h(px(260.))
+                        .rounded(px(10.))
+                        .border_1()
+                        .border_color(rgb(BORDER_SUBTLE))
+                        .when(empty, |el| {
+                            el.child(div().p(px(12.)).child(hint(
+                                "没有可选的版本。稍后再试，或到设置里检查下载来源。",
+                            )))
+                        })
+                        .when_some(local_section, |el, s| el.child(s))
+                        .when_some(remote_section, |el, s| el.child(s))
+                        .overflow_y_scrollbar(),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .rounded(px(10.))
+                        .border_1()
+                        .border_color(rgb(BORDER_SUBTLE))
+                        .py(px(4.))
+                        .child(
+                            div().px(px(8.)).py(px(4.)).child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(TEXT_2))
+                                    .child("自动跟随"),
+                            ),
+                        )
+                        .child(clickable(
+                            Hoverable::new(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .px(px(12.))
+                                    .py(px(8.))
+                                    .rounded(px(8.))
+                                    .when(follow_selected, |el| el.bg(rgb(PRIMARY_MUTED)))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_shrink_0()
+                                            .size(px(16.))
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_full()
+                                            .border_2()
+                                            .border_color(rgb(if follow_selected {
+                                                PRIMARY
+                                            } else {
+                                                BORDER
+                                            }))
+                                            .when(follow_selected, |el| {
+                                                el.child(
+                                                    div()
+                                                        .size(px(6.))
+                                                        .rounded_full()
+                                                        .bg(rgb(PRIMARY)),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(if follow_selected {
+                                                PRIMARY
+                                            } else {
+                                                TEXT
+                                            }))
+                                            .child("最新稳定版"),
+                                    )
+                                    .child(div().flex_1())
+                                    .child(hint("自动使用最新安装的版本"))
+                                    .when(following, |el| {
+                                        el.child(chip("当前使用", ChipTone::Info))
+                                    }),
+                                move |s| {
+                                    if follow_selected {
+                                        s
+                                    } else {
+                                        s.bg(rgb(BG_ROW_HOVER))
+                                    }
+                                },
+                            ),
+                            !dialog.busy,
+                            cx.listener(|this, _, _, cx| {
+                                if let Some(Dialog::SwitchRuntime(dialog)) = this.dialog.as_mut() {
+                                    dialog.selected = Some(LATEST_STABLE.to_owned());
+                                    dialog.incompatible.clear();
+                                    cx.notify();
+                                }
+                            }),
+                        )),
+                )
+                .when_some(status, |el, s| el.child(div().mt(px(6.)).child(s)))
+                .when_some(warning, |el, w| el.child(w))
+                .when_some(dialog.list_note.clone(), |el, note| {
+                    el.child(
+                        div()
+                            .mt(px(6.))
+                            .text_size(px(12.))
+                            .text_color(rgb(WARNING_TEXT))
+                            .child(note),
+                    )
+                })
+                .when(dialog.only_prerelease, |el| {
+                    el.child(div().mt(px(6.)).child(hint(
+                        "这个来源目前只有预发布版本，所以也列出了它们。",
+                    )))
+                })
+                .child(div().mt(px(2.)).child(hint(
+                    "选择本地已有的版本可立即切换；选择在线版本会在切换后自动下载。",
+                ))),
             div().child(self.cancel_button(cx)).child(submit),
         )
     }

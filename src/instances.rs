@@ -97,6 +97,10 @@ pub struct RuntimeConfig {
     pub dsh_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_version: Option<String>,
+    /// Binding before the most recent in-place switch, so a failed upgrade
+    /// can be reverted with one click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_binding: Option<String>,
 }
 
 impl Default for RuntimeConfig {
@@ -104,6 +108,7 @@ impl Default for RuntimeConfig {
         Self {
             dsh_version: default_runtime_version(),
             last_used_version: None,
+            previous_binding: None,
         }
     }
 }
@@ -355,6 +360,8 @@ impl InstanceRepository {
         target_config.color = source_config.color;
         target_config.runtime = source_config.runtime;
         target_config.runtime.last_used_version = None;
+        // A clone has no switch history of its own.
+        target_config.runtime.previous_binding = None;
         target_config.isolation = source_config.isolation;
         target_config.safety = source_config.safety;
         target_config.origin = OriginConfig {
@@ -394,6 +401,39 @@ impl InstanceRepository {
     ) -> Result<InstanceConfig, RepositoryError> {
         let mut config = self.load(id)?;
         config.runtime.dsh_version = dsh_version.into();
+        // An explicit rebind (new instance, pack import, moving instances off a
+        // runtime that is about to be deleted) invalidates the revert target.
+        config.runtime.previous_binding = None;
+        self.save(&config)?;
+        Ok(config)
+    }
+
+    /// Switch an instance to another runtime in place.  The old binding is
+    /// remembered in `previous_binding` so a failed upgrade can be reverted;
+    /// data, plugins and sessions stay where they are.
+    pub fn switch_runtime_binding(
+        &self,
+        id: &str,
+        dsh_version: impl Into<String>,
+    ) -> Result<InstanceConfig, RepositoryError> {
+        let mut config = self.load(id)?;
+        let next = dsh_version.into();
+        if config.runtime.dsh_version == next {
+            return Ok(config);
+        }
+        config.runtime.previous_binding = Some(config.runtime.dsh_version.clone());
+        config.runtime.dsh_version = next;
+        self.save(&config)?;
+        Ok(config)
+    }
+
+    /// Undo the most recent in-place runtime switch.
+    pub fn revert_runtime_binding(&self, id: &str) -> Result<InstanceConfig, RepositoryError> {
+        let mut config = self.load(id)?;
+        let Some(previous) = config.runtime.previous_binding.take() else {
+            return Ok(config);
+        };
+        config.runtime.dsh_version = previous;
         self.save(&config)?;
         Ok(config)
     }
@@ -673,6 +713,50 @@ mod tests {
         assert_eq!(renamed.name, "新名称");
         assert_eq!(repository.paths(&created.id).unwrap(), paths_before);
         assert_eq!(repository.load(&created.id).unwrap(), renamed);
+    }
+
+    #[test]
+    fn switching_runtime_binding_keeps_data_and_remembers_the_previous_one() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let created = repository.create_blank("工作区").unwrap();
+        let paths_before = repository.paths(&created.id).unwrap();
+        let marker = paths_before.home.join("profiles/desktop/package.json");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::write(&marker, br#"{"dependencies":{}}"#).unwrap();
+
+        let switched = repository
+            .switch_runtime_binding(&created.id, "0.2.2-rc.1")
+            .unwrap();
+
+        assert_eq!(switched.runtime.dsh_version, "0.2.2-rc.1");
+        assert_eq!(
+            switched.runtime.previous_binding.as_deref(),
+            Some(created.runtime.dsh_version.as_str())
+        );
+        // Data stays exactly where it was.
+        assert_eq!(repository.paths(&created.id).unwrap(), paths_before);
+        assert_eq!(
+            fs::read(&marker).unwrap(),
+            br#"{"dependencies":{}}"#.to_vec()
+        );
+
+        let reverted = repository.revert_runtime_binding(&created.id).unwrap();
+        assert_eq!(reverted.runtime.dsh_version, created.runtime.dsh_version);
+        assert_eq!(reverted.runtime.previous_binding, None);
+    }
+
+    #[test]
+    fn switching_to_the_same_binding_records_nothing() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let created = repository.create_blank("工作区").unwrap();
+
+        let switched = repository
+            .switch_runtime_binding(&created.id, created.runtime.dsh_version.clone())
+            .unwrap();
+
+        assert_eq!(switched.runtime.previous_binding, None);
     }
 
     #[test]

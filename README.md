@@ -107,6 +107,10 @@ executable — no installer and no Visual C++ Redistributable required.
 - Installers dropped into `runtimes/` are installed offline.
 - Marina checks for a new version once a day and suggests cleanup when more than `max_runtimes`
   are installed.
+- Switching a running instance to a newly released DSH keeps everything: in the instance's Settings
+  tab, "Switch runtime…" rebinds it in place, with data, plugins, sessions and logins untouched. A
+  snapshot is taken first, and "Switch back to the previous runtime" reverts the change. The same
+  dialog also switches back to following "latest stable".
 
 ### Marina Packs
 

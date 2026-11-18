@@ -20,6 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use ui::runtime_label;
 
 use dsh_marina::catalog;
 use dsh_marina::copy;
@@ -582,9 +583,27 @@ struct NewInstanceDialog {
     busy: bool,
 }
 
+/// State of the "更换运行时" dialog.
+struct SwitchRuntimeDialog {
+    instance_id: String,
+    /// Binding the instance uses right now, so re-selecting it disables submit.
+    current: String,
+    /// Versions, newest first; installed ones carry no remote entry.
+    versions: Vec<VersionChoice>,
+    selected: Option<String>,
+    listing: bool,
+    list_error: Option<String>,
+    list_note: Option<String>,
+    only_prerelease: bool,
+    busy: bool,
+    /// Plugin names the market index declares incompatible with `selected`.
+    incompatible: Vec<String>,
+}
+
 /// Dialog variants for various operations.
 enum Dialog {
     NewInstance(NewInstanceDialog),
+    SwitchRuntime(SwitchRuntimeDialog),
     RestoreSnapshot {
         instance_id: String,
         snapshot_id: String,
@@ -3888,6 +3907,286 @@ impl MarinaWindow {
         }));
         self.list_versions(cx);
         cx.notify();
+    }
+
+    /// "更换运行时…": switch an existing instance to another DSH version in
+    /// place.  Data, plugins and sessions never move; only the binding does.
+    fn open_switch_runtime_dialog(&mut self, instance_id: String, cx: &mut Context<Self>) {
+        let Ok(instance) = self.state.repository.load(&instance_id) else {
+            return;
+        };
+        let mut installed: Vec<String> = self
+            .state
+            .registry
+            .scan()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| !r.is_external())
+            .map(|r| r.version)
+            .collect();
+        installed.sort_by(|a, b| dsh_marina::runtimes::compare_versions(b, a));
+        let selected = if instance.runtime.dsh_version == EXTERNAL_RUNTIME_ID {
+            // The external DSH has no row of its own; nothing is preselected.
+            None
+        } else {
+            Some(instance.runtime.dsh_version.clone())
+        };
+        self.dialog = Some(Dialog::SwitchRuntime(SwitchRuntimeDialog {
+            instance_id,
+            current: instance.runtime.dsh_version.clone(),
+            versions: installed
+                .into_iter()
+                .map(|version| VersionChoice {
+                    version,
+                    installed: true,
+                    remote: None,
+                })
+                .collect(),
+            selected,
+            listing: false,
+            list_error: None,
+            list_note: None,
+            only_prerelease: false,
+            busy: false,
+            incompatible: Vec::new(),
+        }));
+        self.list_switch_versions(cx);
+        cx.notify();
+    }
+
+    /// Read every version the download source offers into the switch dialog.
+    fn list_switch_versions(&mut self, cx: &mut Context<Self>) {
+        let Some(Dialog::SwitchRuntime(dialog)) = self.dialog.as_mut() else {
+            return;
+        };
+        if dialog.listing {
+            return;
+        }
+        dialog.listing = true;
+        cx.notify();
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let settings = state.settings_store.load().unwrap_or_default();
+                    download::list_versions(&maintenance::feed_options(&settings))
+                        .map(|listed| (listed, download::take_list_note()))
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(Dialog::SwitchRuntime(dialog)) = this.dialog.as_mut() else {
+                    return;
+                };
+                dialog.listing = false;
+                match result {
+                    Ok(((_source, remote, only_pre), note)) => {
+                        dialog.only_prerelease = only_pre;
+                        dialog.list_note = note;
+                        for version in remote {
+                            match dialog
+                                .versions
+                                .iter_mut()
+                                .find(|c| c.version == version.version)
+                            {
+                                Some(choice) => choice.remote = Some(version),
+                                None => dialog.versions.push(VersionChoice {
+                                    version: version.version.clone(),
+                                    installed: false,
+                                    remote: Some(version),
+                                }),
+                            }
+                        }
+                        dialog.versions.sort_by(|a, b| {
+                            dsh_marina::runtimes::compare_versions(&b.version, &a.version)
+                        });
+                        if dialog.selected.is_none() {
+                            dialog.selected = dialog.versions.first().map(|c| c.version.clone());
+                        }
+                        let id = dialog.instance_id.clone();
+                        let selected = dialog.selected.clone();
+                        let incompatible = this.incompatible_plugins(&id, selected.as_deref());
+                        if let Some(Dialog::SwitchRuntime(dialog)) = this.dialog.as_mut() {
+                            dialog.incompatible = incompatible;
+                        }
+                    }
+                    Err(e) => dialog.list_error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Installed plugins the market index declares incompatible with `version`
+    /// (an empty version or a missing index means "nothing to warn about").
+    fn incompatible_plugins(&self, instance_id: &str, version: Option<&str>) -> Vec<String> {
+        let Some(version) = version.filter(|v| *v != LATEST_STABLE && *v != EXTERNAL_RUNTIME_ID)
+        else {
+            return Vec::new();
+        };
+        let Some(index) = self.market.index.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(paths) = self.state.repository.paths(instance_id) else {
+            return Vec::new();
+        };
+        let Ok(installed) = dsh_marina::plugins::list_plugins(&paths.home) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = installed
+            .iter()
+            .filter(|plugin| {
+                index
+                    .plugins
+                    .iter()
+                    .any(|entry| entry.name == plugin.name && !entry.supports(version))
+            })
+            .map(|plugin| plugin.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Apply the chosen runtime to an existing instance: snapshot first, then
+    /// rebind; download the runtime afterwards when it is not installed yet.
+    fn submit_switch_runtime(&mut self, cx: &mut Context<Self>) {
+        let Some(Dialog::SwitchRuntime(dialog)) = self.dialog.as_mut() else {
+            return;
+        };
+        if dialog.busy {
+            return;
+        }
+        let Some(target) = dialog.selected.clone() else {
+            return;
+        };
+        if target == dialog.current {
+            return;
+        }
+        let id = dialog.instance_id.clone();
+        dialog.busy = true;
+        cx.notify();
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            let result: Result<(InstanceConfig, Option<download::RemoteVersion>), String> = cx
+                .background_executor()
+                .spawn(async move {
+                    lifecycle::require_stopped(&state, &id, "更换运行时")?;
+                    let config = state.repository.load(&id).map_err(|e| e.to_string())?;
+                    if config.runtime.dsh_version == target {
+                        return Ok((config, None));
+                    }
+                    let paths = state.repository.paths(&id).map_err(|e| e.to_string())?;
+                    let _snapshot = dsh_marina::snapshots::SnapshotStore::new(&paths.root)
+                        .create(format!("切换到 {} 之前的快照", runtime_label(&target)))
+                        .map_err(|e| format!("切换前的快照创建失败：{e}"))?;
+                    let config = state
+                        .repository
+                        .switch_runtime_binding(&id, &target)
+                        .map_err(|e| e.to_string())?;
+                    let installed = state
+                        .registry
+                        .scan()
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|r| r.version == target);
+                    let remote = if installed
+                        || target == LATEST_STABLE
+                        || target == EXTERNAL_RUNTIME_ID
+                    {
+                        None
+                    } else {
+                        let settings = state.settings_store.load().unwrap_or_default();
+                        download::list_versions(&maintenance::feed_options(&settings))
+                            .ok()
+                            .and_then(|(_, remote, _)| {
+                                remote.into_iter().find(|v| v.version == target)
+                            })
+                    };
+                    Ok((config, remote))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok((config, remote)) => {
+                        this.dialog = None;
+                        lifecycle::invalidate_disk_usage(&this.state);
+                        this.refresh_instances(cx);
+                        let message = format!(
+                            "实例「{}」已切换到 {}；数据、插件和会话保持原样，切换前的配置已存为快照",
+                            config.name,
+                            runtime_label(&config.runtime.dsh_version)
+                        );
+                        this.last_success = Some(match &remote {
+                            Some(v) => format!("{message}。正在下载 DSH {}，下载完成后即可启动", v.version),
+                            None => message,
+                        });
+                        if let Some(version) = remote {
+                            this.download_runtime(version, cx);
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(Dialog::SwitchRuntime(dialog)) = this.dialog.as_mut() {
+                            dialog.busy = false;
+                        }
+                        this.last_error = Some(format!("更换运行时失败：{e}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// One click back to the runtime the instance used before its last switch.
+    fn revert_runtime(&mut self, id: String, cx: &mut Context<Self>) {
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    lifecycle::require_stopped(&state, &id, "换回上一个运行时")?;
+                    let config = state.repository.load(&id).map_err(|e| e.to_string())?;
+                    // The old runtime may have been deleted since the switch;
+                    // reverting to it would leave the instance unable to start.
+                    if let Some(previous) = config.runtime.previous_binding.as_deref() {
+                        let special = previous == LATEST_STABLE || previous == EXTERNAL_RUNTIME_ID;
+                        let installed = state
+                            .registry
+                            .all(&state.runtime_store.load().unwrap_or_default())
+                            .unwrap_or_default()
+                            .iter()
+                            .any(|r| r.version == previous || r.id == previous);
+                        if !special && !installed {
+                            return Err(format!(
+                                "上一个运行时 {} 已经不在了。请用「更换运行时…」选一个还在的版本",
+                                runtime_label(previous)
+                            ));
+                        }
+                    }
+                    state
+                        .repository
+                        .revert_runtime_binding(&id)
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(config) => {
+                        this.refresh_instances(cx);
+                        this.last_success = Some(format!(
+                            "实例「{}」已换回 {}",
+                            config.name,
+                            runtime_label(&config.runtime.dsh_version)
+                        ));
+                    }
+                    Err(e) => this.last_error = Some(format!("换回上一个运行时失败：{e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Pick an instance package for the "导入整合包" mode and read its manifest.

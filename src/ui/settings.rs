@@ -147,7 +147,7 @@ impl MarinaWindow {
                         if used == 0 {
                             "删除"
                         } else {
-                            "改绑并删除…"
+                            "解绑并删除…"
                         },
                         Tone::Default,
                         true,
