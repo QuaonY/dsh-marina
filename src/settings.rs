@@ -72,6 +72,8 @@ pub struct MarinaSettings {
     pub default_link_instance: Option<String>,
     /// Address of the shared 整合包 catalog (https:// or a local file).
     pub pack_catalog_url: String,
+    /// Check GitHub for a new Marina release once per launch.
+    pub auto_check_update: bool,
 }
 
 impl Default for MarinaSettings {
@@ -91,6 +93,7 @@ impl Default for MarinaSettings {
             previous_link_command: None,
             default_link_instance: None,
             pack_catalog_url: DEFAULT_PACK_CATALOG_URL.to_owned(),
+            auto_check_update: true,
         }
     }
 }
@@ -160,6 +163,14 @@ impl Default for LifecycleSection {
 #[serde(default)]
 struct UiSection {
     minimize_to_tray_hint_shown: bool,
+    /// Off only when the user turns the launch-time check off.
+    #[serde(skip_serializing_if = "is_true")]
+    auto_check_update: Option<bool>,
+}
+
+/// `skip_serializing_if` helper for options whose default is `true`.
+fn is_true(value: &Option<bool>) -> bool {
+    value.unwrap_or(true)
 }
 
 /// On-disk layout.  The flat `legacy_*` keys are only read, never written.
@@ -218,6 +229,7 @@ impl SettingsFile {
             } else {
                 self.packs.catalog_url
             },
+            auto_check_update: self.ui.auto_check_update.unwrap_or(true),
         }
     }
 
@@ -239,6 +251,7 @@ impl SettingsFile {
             },
             ui: UiSection {
                 minimize_to_tray_hint_shown: settings.tray_hint_shown,
+                auto_check_update: (!settings.auto_check_update).then_some(false),
             },
             links: LinksSection {
                 handle_links: settings.handle_links,

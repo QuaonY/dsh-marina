@@ -32,6 +32,31 @@ impl Drop for SingleInstance {
     }
 }
 
+/// Wait until `pid` has exited, or `timeout` passes.
+///
+/// Used by `--wait-for` after an in-place update: the new build must not try to
+/// take the single-instance mutex until the build it replaces is really gone.
+/// Returns `true` when the process is no longer running.
+#[cfg(windows)]
+pub fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) -> bool {
+    use windows::Win32::Foundation::WAIT_OBJECT_0;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+
+    let handle = match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+        // The process is already gone, which is what we were waiting for.
+        Err(_) => return true,
+        Ok(handle) => handle,
+    };
+    let millis = timeout.as_millis().min(u32::MAX as u128) as u32;
+    let waited = unsafe { WaitForSingleObject(handle, millis) };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    waited == WAIT_OBJECT_0
+}
+
 /// `None` means another Marina process already owns the mutex.
 pub fn acquire_single_instance() -> Option<SingleInstance> {
     // Debug builds may use a separate lock so a development copy can run

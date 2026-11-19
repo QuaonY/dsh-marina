@@ -30,6 +30,7 @@ pub mod process;
 
 pub mod runtime;
 pub mod runtimes;
+pub mod selfupdate;
 pub mod sensitive;
 pub mod settings;
 pub mod snapshots;

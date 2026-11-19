@@ -1,0 +1,17 @@
+{
+    "tag_name":  "v0.1.2",
+    "html_url":  "https://github.com/QuaonY/dsh-marina/releases/tag/v0.1.2",
+    "body":  "## 鍙樺寲\n\n- 銆屾鏌ユ洿鏂般€嶆敼鎴愮湡姝ｇ殑鑷姩鏇存柊锛氭瘡娆″惎鍔?Marina 鏃惰嚜鍔ㄦ鏌ヤ竴娆★紝鍙戠幇鏂扮増鏈細鍦ㄦ秷鎭搩閾涗笂浜孩鐐广€?- 鐐瑰紑鏇存柊寮圭獥鍙互鐪嬪埌褰撳墠鐗堟湰 鈫?鏂扮増鏈€佽繖涓€鐗堢殑鏇存柊鍐呭锛屼互鍙婅烦杞埌 GitHub 鐨勯摼鎺ャ€?- 銆屼笅杞藉苟鏇存柊銆嶄細鏄剧ず涓嬭浇杩涘害锛屼笅杞藉畬鎴愬悗鍋?SHA-256 鏍￠獙锛屽啀鎻愪緵銆岄噸鍚苟鏇存柊銆嶅拰銆岀◢鍚庢洿鏂般€嶄袱涓€夋嫨銆?- 鏈夊疄渚嬪湪杩愯鏃剁偣銆岄噸鍚苟鏇存柊銆嶄細鍏堟彁绀猴紱涓嶆兂涓柇宸ヤ綔鍙互閫夈€岄€€鍑烘椂鍐嶆洿鏂般€嶏紝绛夐€€鍑?Marina 鏃跺啀瀹夎銆?- 銆岃缃?\u003e 閫氱敤銆嶆柊澧炪€岃嚜鍔ㄦ鏌ユ洿鏂般€嶅紑鍏筹紝鍙互瀹屽叏鍏虫帀鍚姩鏃剁殑妫€鏌ャ€?- 鏂板 NSIS 瀹夎鍖咃細鍙互閫夊畨瑁呯洰褰曘€佹闈㈠揩鎹锋柟寮忓拰寮€濮嬭彍鍗曪紝涔熶細鍑虹幇鍦ㄣ€屽簲鐢ㄥ拰鍔熻兘銆嶉噷銆傝鍒扮敤鎴风洰褰曟椂锛屽畨瑁呭拰鏇存柊閮戒笉闇€瑕佺鐞嗗憳鏉冮檺銆?\n## 涓嬭浇\n\n- 瀹夎鐗堬細`dsh-marina-setup-v0.1.2-windows-x64.exe`锛岃繍琛屽悗鎸夊悜瀵煎畨瑁呫€?- 渚挎惡鐗堬細`dsh-marina-v0.1.2-windows-x64.exe`锛岄浂渚濊禆鍗曟枃浠讹紝鏀惧埌浠绘剰鐩綍灏辫兘杩愯锛屼笉闇€瑕佸畨瑁咃紝涔熶笉闇€瑕?Visual C++ 杩愯搴撱€?\n涓や釜鐗堟湰鍏辩敤鍚屼竴浠芥暟鎹洰褰曪紙榛樿 `%USERPROFILE%\\.dsh-marina`锛夛紝鍙互闅忔椂浜掓崲銆?\nWindows 10 21H2 鍙婁互涓婏紝闇€瑕佹敮鎸?DirectX 11 鐨勬樉鍗￠┍鍔ㄣ€?\n",
+    "assets":  [
+                   {
+                       "name":  "dsh-marina-v0.1.2-windows-x64.exe",
+                       "browser_download_url":  "https://cnb.cool/QuaonY/dsh-marina/-/releases/download/v0.1.2/dsh-marina-v0.1.2-windows-x64.exe",
+                       "size":  35062272
+                   },
+                   {
+                       "name":  "dsh-marina-v0.1.2-windows-x64.exe.sha256",
+                       "browser_download_url":  "https://cnb.cool/QuaonY/dsh-marina/-/releases/download/v0.1.2/dsh-marina-v0.1.2-windows-x64.exe.sha256",
+                       "size":  99
+                   }
+               ]
+}

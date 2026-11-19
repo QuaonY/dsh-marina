@@ -142,6 +142,36 @@ pub fn get_user_info(token: &str) -> Result<GitHubUser, String> {
 pub struct LatestRelease {
     pub tag_name: String,
     pub html_url: String,
+    /// Release notes in GitHub-flavoured Markdown.
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub assets: Vec<ReleaseAsset>,
+}
+
+/// One downloadable file attached to a release.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub browser_download_url: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+impl LatestRelease {
+    /// The portable executable attached to this release, if any.
+    pub fn windows_exe(&self) -> Option<&ReleaseAsset> {
+        self.assets
+            .iter()
+            .find(|asset| asset.name.ends_with("-windows-x64.exe"))
+    }
+
+    /// The `...exe.sha256` sibling published next to the executable.
+    pub fn windows_exe_sha256(&self) -> Option<&ReleaseAsset> {
+        self.assets
+            .iter()
+            .find(|asset| asset.name.ends_with("-windows-x64.exe.sha256"))
+    }
 }
 
 /// 查询 DSH Marina 的最新正式版发布；仓库还没有正式版时返回 `Ok(None)`。
@@ -179,6 +209,43 @@ pub fn latest_release(token: Option<&str>) -> Result<Option<LatestRelease>, Stri
         .json::<LatestRelease>()
         .map(Some)
         .map_err(|e| format!("解析响应失败：{e}"))
+}
+
+/// CNB 的 release 镜像清单。CNB 的 release API 需要登录令牌，所以发布时
+/// 同一个小 JSON 也会写进仓库，由它的公开只读路径提供。
+const CNB_UPDATE_MANIFEST: &str = "https://cnb.cool/QuaonY/dsh-marina/-/git/raw/main/update.json";
+
+/// 查询 CNB 镜像里的最新版本。返回 `None` 表示还没有发布过清单。
+pub fn latest_release_cnb() -> Result<Option<LatestRelease>, String> {
+    let response = client()?
+        .get(CNB_UPDATE_MANIFEST)
+        .header("User-Agent", "dsh-marina")
+        .send()
+        .map_err(|e| format!("网络请求失败：{e}"))?;
+    let status = response.status();
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(format!("CNB 返回 {status}"));
+    }
+    let text = response.text().map_err(|e| format!("读取响应失败：{e}"))?;
+    let release: LatestRelease =
+        serde_json::from_str(&text).map_err(|e| format!("解析响应失败：{e}"))?;
+    Ok(Some(release))
+}
+
+/// 按「GitHub 优先，失败回退 CNB」的顺序查最新版本。
+///
+/// 两边都失败时把两个错误都带回去，用户才知道到底卡在哪。
+pub fn latest_release_any(token: Option<&str>) -> Result<Option<LatestRelease>, String> {
+    match latest_release(token) {
+        Ok(release) => Ok(release),
+        Err(github_error) => match latest_release_cnb() {
+            Ok(release) => Ok(release),
+            Err(cnb_error) => Err(format!("GitHub：{github_error}；CNB：{cnb_error}")),
+        },
+    }
 }
 
 fn token_file(data_root: &Path) -> std::path::PathBuf {
@@ -336,5 +403,37 @@ mod tests {
         save_token(dir.path(), "t", &user()).unwrap();
         clear_token(dir.path());
         assert!(load_token(dir.path()).is_none());
+    }
+
+    #[test]
+    fn reads_the_mirror_manifest_and_finds_the_windows_assets() {
+        // Same shape as update.json and the GitHub release response.
+        // `r###` because the notes start a heading, i.e. contain `"##`.
+        let json = r###"{
+            "tag_name": "v0.1.2",
+            "html_url": "https://github.com/QuaonY/dsh-marina/releases/tag/v0.1.2",
+            "body": "## 变化\n\n- 新增自动更新\n",
+            "assets": [
+                {"name":"dsh-marina-v0.1.2-windows-x64.exe","browser_download_url":"https://example.com/a.exe","size":123},
+                {"name":"dsh-marina-v0.1.2-windows-x64.exe.sha256","browser_download_url":"https://example.com/a.exe.sha256","size":99}
+            ]
+        }"###;
+        let release: LatestRelease = serde_json::from_str(json).unwrap();
+        assert_eq!(release.tag_name, "v0.1.2");
+        assert!(release.body.contains("自动更新"));
+        assert_eq!(release.windows_exe().map(|asset| asset.size), Some(123));
+        assert!(
+            release
+                .windows_exe_sha256()
+                .is_some_and(|asset| asset.name.ends_with(".sha256"))
+        );
+    }
+
+    #[test]
+    fn a_release_without_assets_is_read_as_empty() {
+        let json = r#"{"tag_name":"v0.1.0","html_url":"https://example.com"}"#;
+        let release: LatestRelease = serde_json::from_str(json).unwrap();
+        assert!(release.windows_exe().is_none());
+        assert!(release.body.is_empty());
     }
 }

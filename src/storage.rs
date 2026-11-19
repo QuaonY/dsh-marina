@@ -307,6 +307,47 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), std::io::Error> {
 
 /// Launch a detached cmd script that removes Marina after the process exits.
 /// `remove_data` is false when the data directory has already been moved.
+/// Run the NSIS uninstaller once Marina has exited.
+///
+/// The uninstaller removes the program files, shortcuts and the entry under
+/// 「应用和功能」; waiting here keeps it from tripping over the running exe.
+pub fn spawn_installer_uninstall(uninstaller: &Path) -> Result<PathBuf, StorageError> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let script = std::env::temp_dir().join(format!(
+        "dsh-marina-uninstall-{}-{stamp}.cmd",
+        std::process::id()
+    ));
+    let contents = format!(
+        "@echo off\r\nping 127.0.0.1 -n 3 >nul\r\nstart \"\" /wait \"{}\" /S\r\ndel /f /q \"%~f0\"\r\n",
+        batch_escape(uninstaller)
+    );
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&script)?;
+        file.write_all(contents.as_bytes())?;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd.exe")
+            .arg("/C")
+            .arg(&script)
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .spawn()?;
+    }
+
+    Ok(script)
+}
+
 pub fn spawn_uninstall_script(
     executable: &Path,
     data_root: &Path,

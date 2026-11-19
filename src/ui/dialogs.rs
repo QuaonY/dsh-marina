@@ -133,6 +133,31 @@ fn error_text(text: String) -> Div {
     div().text_color(rgb(DANGER)).child(text)
 }
 
+/// One line of release notes, with the Markdown that GitHub renders stripped
+/// down to the shapes a single text row can carry: headings, bullets and bold.
+fn render_note_line(line: &str) -> Div {
+    let trimmed = line.trim_end();
+    if trimmed.trim().is_empty() {
+        return div().h(px(6.));
+    }
+    let heading = trimmed.trim_start().starts_with('#');
+    let mut text = trimmed.trim_start_matches('#').trim_start().to_owned();
+    if let Some(rest) = text.strip_prefix("- ").or_else(|| text.strip_prefix("* ")) {
+        text = format!("· {rest}");
+    }
+    // `**bold**` and `` `code` ``: keep the words, drop the markers.
+    let text = text.replace("**", "").replace('`', "");
+    if heading {
+        div()
+            .pt(px(2.))
+            .font_weight(FontWeight::BOLD)
+            .text_color(rgb(TEXT))
+            .child(text)
+    } else {
+        div().child(text)
+    }
+}
+
 impl MarinaWindow {
     fn cancel_button(&self, cx: &mut Context<Self>) -> Div {
         clickable(
@@ -473,7 +498,21 @@ impl MarinaWindow {
                     )),
             ),
             Dialog::UninstallMarina { mode, stats } => self.render_uninstall_marina(*mode, stats.as_ref(), cx),
-            Dialog::UninstallExternal { delete_data } => {
+            Dialog::Update {
+                version,
+                release,
+                downloading,
+                error,
+            } => self.render_update_dialog(version, release, *downloading, error.as_deref(), cx),
+            Dialog::UpdateReady { version } => self.render_update_ready_dialog(version, cx),
+            Dialog::UpdateNeedsStop {
+                version,
+                path,
+                running,
+            } => self.render_update_needs_stop(version, path.clone(), running, cx),
+            Dialog::UpdateOnExit { version, path } => {
+                self.render_update_on_exit(version, path.clone(), cx)
+            }            Dialog::UninstallExternal { delete_data } => {
                 let delete_data = *delete_data;
                 let options = [
                     (false, "只卸载程序（推荐）", "保留 ~/.dsh 和 %APPDATA% 里的数据，以后重装还能用"),
@@ -863,6 +902,224 @@ impl MarinaWindow {
         Some(dialog)
     }
 
+    /// 「版本更新」：当前版本 → 新版本，更新内容，下载并更新。
+    fn render_update_dialog(
+        &self,
+        version: &str,
+        release: &github::LatestRelease,
+        downloading: bool,
+        error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let current = env!("CARGO_PKG_VERSION");
+        let notes = if release.body.trim().is_empty() {
+            "这个版本没有写更新说明。".to_owned()
+        } else {
+            release.body.trim().to_owned()
+        };
+        let project_url = release.html_url.clone();
+        let submit = clickable(
+            btn(
+                if downloading {
+                    "正在下载…"
+                } else {
+                    "下载并更新"
+                },
+                Tone::Primary,
+                false,
+            ),
+            !downloading,
+            cx.listener(|this, _, _, cx| this.download_app_update(cx)),
+        );
+        dialog_shell(
+            "版本更新",
+            TEXT,
+            640.,
+            body()
+                .gap(px(16.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(14.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(hint("当前版本"))
+                                .child(
+                                    div()
+                                        .font_family(MONO)
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(current.to_owned()),
+                                ),
+                        )
+                        .child(div().text_size(px(18.)).text_color(rgb(PRIMARY)).child("→"))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(hint("新版本"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .child(
+                                            div()
+                                                .font_family(MONO)
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(rgb(PRIMARY))
+                                                .child(version.to_owned()),
+                                        )
+                                        .child(chip("可更新", ChipTone::Warn)),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child("更新内容"))
+                        .child(
+                            div()
+                                .mt(px(6.))
+                                .max_h(px(260.))
+                                .rounded(px(10.))
+                                .border_1()
+                                .border_color(rgb(BORDER_SUBTLE))
+                                .bg(rgb(BG_ELEVATED))
+                                .px(px(14.))
+                                .py(px(12.))
+                                .overflow_y_scrollbar()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(4.))
+                                        .text_size(px(12.5))
+                                        .text_color(rgb(TEXT_2))
+                                        .children(notes.lines().map(render_note_line)),
+                                ),
+                        ),
+                )
+                .child(clickable(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.5))
+                        .font_family(MONO)
+                        .text_color(rgb(PRIMARY))
+                        .hover(|s| s.text_color(rgb(PRIMARY_HOVER)))
+                        .child("在 GitHub 上查看这个版本"),
+                    true,
+                    cx.listener(move |_, _, _, cx| cx.open_url(&project_url)),
+                ))
+                .when_some(error.map(str::to_owned), |el, error| {
+                    el.child(error_text(error))
+                }),
+            div().child(self.cancel_button(cx)).child(submit),
+        )
+    }
+
+    /// 下载完成：重启并更新，或稍后再更新。
+    fn render_update_ready_dialog(&self, version: &str, cx: &mut Context<Self>) -> Div {
+        dialog_shell(
+            "更新已准备好",
+            TEXT,
+            560.,
+            body().child(paragraph(format!(
+                "版本 {version} 已下载并通过校验。重启 Marina 就会切换到新版本，已有的实例和数据都不会受影响。"
+            ))),
+            div()
+                .child(clickable(
+                    btn("稍后更新", Tone::Default, false),
+                    true,
+                    cx.listener(|this, _, _, cx| this.defer_update(cx)),
+                ))
+                .child(clickable(
+                    btn("重启并更新", Tone::Primary, false),
+                    true,
+                    cx.listener(|this, _, _, cx| this.restart_and_update(cx)),
+                )),
+        )
+    }
+
+    /// 有实例在跑时点「重启并更新」：先请用户关掉，或改到退出后更新。
+    fn render_update_needs_stop(
+        &self,
+        version: &str,
+        path: PathBuf,
+        running: &[String],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let names = running.join("、");
+        dialog_shell(
+            "需要先关掉实例",
+            TEXT,
+            580.,
+            body()
+                .gap(px(12.))
+                .child(paragraph(format!(
+                    "更新到 {version} 需要重启 Marina，而现在还有实例在运行：{names}。"
+                )))
+                .child(paragraph(
+                    "可以现在关掉它们再更新，也可以等这次用完退出 Marina 时再更新——下载好的新版本会一直留着。",
+                )),
+            div()
+                .child(self.cancel_button(cx))
+                .child(clickable(
+                    btn("退出时再更新", Tone::Default, false),
+                    true,
+                    cx.listener(|this, _, _, cx| this.defer_update(cx)),
+                ))
+                .child(clickable(
+                    btn("停止实例并更新", Tone::Primary, false),
+                    true,
+                    cx.listener(move |this, _, _, cx| {
+                        this.apply_update_now(path.clone(), cx);
+                    }),
+                )),
+        )
+    }
+
+    /// 退出 Marina 时，如果之前选了「稍后更新」，在这里再问一次。
+    fn render_update_on_exit(&self, version: &str, path: PathBuf, cx: &mut Context<Self>) -> Div {
+        dialog_shell(
+            "退出前更新",
+            TEXT,
+            560.,
+            body().child(paragraph(format!(
+                "版本 {version} 已经下载好了。现在退出 Marina，顺便装上新版本吗？"
+            ))),
+            div()
+                .child(clickable(
+                    btn("暂不退出", Tone::Default, false),
+                    true,
+                    cx.listener(|this, _, _, cx| {
+                        this.dialog = None;
+                        cx.notify();
+                    }),
+                ))
+                .child(clickable(
+                    btn("这次不更新", Tone::Default, false),
+                    true,
+                    cx.listener(|this, _, _, cx| {
+                        this.dialog = None;
+                        this.app_update.deferred = None;
+                        cx.notify();
+                        crate::perform_quit(crate::StopMode::Graceful, None, cx);
+                    }),
+                ))
+                .child(clickable(
+                    btn("退出并更新", Tone::Primary, false),
+                    true,
+                    cx.listener(move |this, _, _, cx| {
+                        this.apply_update_now(path.clone(), cx);
+                    }),
+                )),
+        )
+    }
+
     fn render_uninstall_marina(
         &self,
         mode: crate::maintenance::UninstallMode,
@@ -953,6 +1210,8 @@ impl MarinaWindow {
             Some(Dialog::Appearance { .. }) => self.submit_appearance(cx),
             Some(Dialog::NewInstance(_)) => self.submit_new_dialog(cx),
             Some(Dialog::SwitchRuntime(_)) => self.submit_switch_runtime(cx),
+            Some(Dialog::Update { .. }) => self.download_app_update(cx),
+            Some(Dialog::UpdateReady { .. }) => self.restart_and_update(cx),
             Some(Dialog::SharePack { .. }) => self.submit_share_pack(cx),
             _ => {}
         }

@@ -178,6 +178,14 @@ pub fn uninstall_marina(state: &AppState, mode: UninstallMode) -> Result<Option<
         dsh_marina::applog::warn(&format!("恢复 dsh:// 协议失败：{e}"));
     }
     let executable = dsh_marina::platform::current_executable()?;
+    // An NSIS-installed copy owns shortcuts and the "应用和功能" entry, so let
+    // its uninstaller remove the program while we only handle the data.
+    let installer_uninstaller = executable.with_file_name("uninstall.exe");
+    if installer_uninstaller.is_file() {
+        storage::spawn_installer_uninstall(&installer_uninstaller)
+            .map_err(|e| format!("无法启动卸载程序：{e}"))?;
+        return Ok(saved);
+    }
     storage::spawn_uninstall_script(&executable, &data_root, mode != UninstallMode::MoveData)
         .map_err(|e| format!("无法安排卸载：{e}"))?;
     Ok(saved)

@@ -71,6 +71,16 @@ impl MarinaWindow {
                     |s| s.confirm_stop = !s.confirm_stop,
                     cx,
                 ),
+            ))
+            .child(form_row(
+                false,
+                "自动检查更新",
+                "每次启动 Marina 时检查一次新版本，发现后通知我",
+                toggle(
+                    settings.auto_check_update,
+                    |s| s.auto_check_update = !s.auto_check_update,
+                    cx,
+                ),
             ));
 
         let runtime_settings = self.state.runtime_store.load().unwrap_or_default();
@@ -539,7 +549,7 @@ impl MarinaWindow {
                     true,
                 ),
                 true,
-                cx.listener(|this, _, _, cx| this.check_app_update(cx)),
+                cx.listener(|this, _, _, cx| this.check_app_update(false, cx)),
             )
         };
         let (update_status, update_action) = if self.app_update.checking {
@@ -568,18 +578,34 @@ impl MarinaWindow {
         } else if let Some(release) = &self.app_update.latest {
             let latest = release.tag_name.trim_start_matches('v').to_owned();
             if dsh_marina::runtimes::compare_versions(&latest, current_version).is_gt() {
-                let url = release.html_url.clone();
+                let staged = self
+                    .app_update
+                    .staged
+                    .as_ref()
+                    .is_some_and(|staged| staged.version == latest);
                 (
                     div()
                         .flex()
                         .items_center()
                         .gap(px(10.))
                         .child(chip(format!("新版本 {latest}"), ChipTone::Warn))
-                        .child(hint(format!("当前 {current_version}"))),
+                        .child(hint(if staged {
+                            format!("已下载，重启后安装 · 当前 {current_version}")
+                        } else {
+                            format!("当前 {current_version}")
+                        })),
                     clickable(
-                        btn("前往下载", Tone::Primary, true),
+                        btn(
+                            if staged {
+                                "重启并更新"
+                            } else {
+                                "查看更新"
+                            },
+                            Tone::Primary,
+                            true,
+                        ),
                         true,
-                        cx.listener(move |_, _, _, cx| cx.open_url(&url)),
+                        cx.listener(|this, _, _, cx| this.open_or_apply_update(cx)),
                     ),
                 )
             } else {

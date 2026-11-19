@@ -207,6 +207,17 @@ fn request_quit(cx: &mut App) {
     let window = app.window.clone();
     let hwnd = app.hwnd;
 
+    // A downloaded update waiting for a restart gets one last chance here.
+    if let Some(window) = window.clone().and_then(|w| w.upgrade()) {
+        let asked = window.update(cx, |this, cx| this.ask_about_deferred_update(cx));
+        if asked {
+            if let Some(hwnd) = hwnd {
+                platform::show_window(hwnd);
+            }
+            return;
+        }
+    }
+
     proceed_with_quit_check(state, window, hwnd, cx);
 }
 
@@ -660,6 +671,28 @@ enum Dialog {
     Exit {
         running: usize,
     },
+    /// 「版本更新」：当前版本 → 新版本，更新内容，下载并更新。
+    Update {
+        version: String,
+        release: github::LatestRelease,
+        downloading: bool,
+        error: Option<String>,
+    },
+    /// 下载完成：重启并更新 / 稍后更新。
+    UpdateReady {
+        version: String,
+    },
+    /// 重启前发现有实例在跑。
+    UpdateNeedsStop {
+        version: String,
+        path: PathBuf,
+        running: Vec<String>,
+    },
+    /// 退出 Marina 时提示安装已经下载好的更新。
+    UpdateOnExit {
+        version: String,
+        path: PathBuf,
+    },
     UninstallMarina {
         mode: maintenance::UninstallMode,
         stats: Option<storage::UninstallStats>,
@@ -845,6 +878,19 @@ struct AppUpdateState {
     latest: Option<github::LatestRelease>,
     checked: bool,
     error: Option<String>,
+    /// The version the bell was last told about, so one release toasts once.
+    notified: Option<String>,
+    /// A downloaded, verified executable waiting for a restart.
+    staged: Option<StagedUpdate>,
+    /// Set by 「稍后更新」: offered again when the user quits Marina.
+    deferred: Option<StagedUpdate>,
+}
+
+/// A new Marina executable downloaded into `<数据目录>/updates`.
+#[derive(Clone)]
+struct StagedUpdate {
+    version: String,
+    path: PathBuf,
 }
 
 /// One entry of the download list.
@@ -1160,8 +1206,23 @@ impl MarinaWindow {
         };
         window.refresh_statuses();
         window.maybe_check_feed_daily(cx);
+        window.maybe_check_app_update(cx);
         window.bind_link_enter(cx);
         window
+    }
+
+    /// 启动时自动检查一次 Marina 自己的新版本（设置里可以关掉）。
+    fn maybe_check_app_update(&mut self, cx: &mut Context<Self>) {
+        let enabled = self
+            .state
+            .settings_store
+            .load()
+            .map(|settings| settings.auto_check_update)
+            .unwrap_or(true);
+        if !enabled {
+            return;
+        }
+        self.check_app_update(true, cx);
     }
 
     fn refresh_instances(&mut self, cx: &mut Context<Self>) {
@@ -2964,6 +3025,24 @@ impl MarinaWindow {
         cx.notify();
     }
 
+    /// Put one message straight into the bell without a toast.
+    ///
+    /// Used for the new-release entry, which has to stay until the user acts on
+    /// it rather than disappear after a few seconds.
+    fn push_notice(&mut self, error: bool, text: String, cx: &mut Context<Self>) {
+        const MAX_HISTORY: usize = 200;
+        self.notices
+            .history
+            .push((error, text, chrono::Local::now()));
+        if self.notices.history.len() > MAX_HISTORY {
+            self.notices.history.remove(0);
+        }
+        if !self.notices.panel_open {
+            self.notices.unread += 1;
+        }
+        cx.notify();
+    }
+
     /// Record new toasts in the bell list and hide them after a while.
     fn track_notices(&mut self, cx: &mut Context<Self>) {
         const MAX_HISTORY: usize = 200;
@@ -3229,7 +3308,10 @@ impl MarinaWindow {
     }
 
     /// 「关于」里的检查更新：查询 Marina 自己的最新正式版。
-    fn check_app_update(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `silent` is set for the launch-time check: a network error then stays in
+    /// the log instead of pushing a toast the user did not ask for.
+    fn check_app_update(&mut self, silent: bool, cx: &mut Context<Self>) {
         if self.app_update.checking {
             return;
         }
@@ -3240,7 +3322,7 @@ impl MarinaWindow {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { github::latest_release(token.as_deref()) })
+                .spawn(async move { github::latest_release_any(token.as_deref()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.app_update.checking = false;
@@ -3251,8 +3333,14 @@ impl MarinaWindow {
                             "[Update] 最新发布: {}",
                             release.tag_name
                         ));
+                        let is_new = this.update_available(&release).is_some();
                         this.app_update.latest = Some(release);
                         this.app_update.error = None;
+                        if is_new {
+                            // A toast puts the release in the bell, with a red
+                            // dot until the user opens the panel.
+                            this.publish_update_notice(cx);
+                        }
                     }
                     Ok(None) => {
                         dsh_marina::applog::info("[Update] 仓库还没有正式版本");
@@ -3262,13 +3350,251 @@ impl MarinaWindow {
                     Err(e) => {
                         dsh_marina::applog::warn(&format!("[Update] 检查更新失败：{e}"));
                         this.app_update.latest = None;
-                        this.app_update.error = Some(e);
+                        this.app_update.error = Some(e.clone());
+                        if !silent {
+                            this.push_notice(true, format!("检查更新失败：{e}"), cx);
+                        }
                     }
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// The release to offer, when it is newer than the running build.
+    fn update_available<'a>(
+        &self,
+        release: &'a github::LatestRelease,
+    ) -> Option<(&'a str, &'a github::LatestRelease)> {
+        let latest = release.tag_name.trim_start_matches('v');
+        dsh_marina::runtimes::compare_versions(latest, env!("CARGO_PKG_VERSION"))
+            .is_gt()
+            .then_some((latest, release))
+    }
+
+    /// Show a new release in the bell: one toast per version, and an entry that
+    /// stays until the user installs or dismisses it.
+    fn publish_update_notice(&mut self, cx: &mut Context<Self>) {
+        let Some(version) = self
+            .app_update
+            .latest
+            .as_ref()
+            .and_then(|release| self.update_available(release).map(|(v, _)| v.to_owned()))
+        else {
+            return;
+        };
+        // A repeated check for the same version must not toast again.
+        let already_seen = self.app_update.notified.as_deref() == Some(version.as_str());
+        self.app_update.notified = Some(version.clone());
+        if !already_seen {
+            let teaser = self
+                .app_update
+                .latest
+                .as_ref()
+                .map(|release| dsh_marina::selfupdate::first_line(&release.body))
+                .unwrap_or_default();
+            let text = if teaser.is_empty() {
+                format!("发现新版本 {version}")
+            } else {
+                format!("发现新版本 {version}：{teaser}")
+            };
+            self.push_notice(false, text, cx);
+        }
+        cx.notify();
+    }
+
+    /// Settings row button: jump straight to the restart dialog once the update
+    /// is already downloaded, otherwise show what the release contains.
+    fn open_or_apply_update(&mut self, cx: &mut Context<Self>) {
+        if self.app_update.staged.is_some() {
+            self.restart_and_update(cx);
+        } else {
+            self.open_update_dialog(cx);
+        }
+    }
+
+    /// 打开「版本更新」弹窗。
+    fn open_update_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(release) = self.app_update.latest.clone() else {
+            return;
+        };
+        let Some((version, _)) = self.update_available(&release) else {
+            return;
+        };
+        let version = version.to_owned();
+        self.notices.panel_open = false;
+        self.dialog = Some(Dialog::Update {
+            version,
+            release,
+            downloading: false,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    /// 下载新版 Marina 到数据目录，校验后留在那里等重启。
+    fn download_app_update(&mut self, cx: &mut Context<Self>) {
+        let Some(Dialog::Update {
+            version, release, ..
+        }) = self.dialog.as_ref()
+        else {
+            return;
+        };
+        let Some(asset) = release.windows_exe().cloned() else {
+            if let Some(Dialog::Update { error, .. }) = self.dialog.as_mut() {
+                *error = Some("这个版本没有发布 Windows 可执行文件".to_owned());
+            }
+            cx.notify();
+            return;
+        };
+        let sha_url = release
+            .windows_exe_sha256()
+            .map(|asset| asset.browser_download_url.clone());
+        let version = version.clone();
+        let key = format!("marina:{version}");
+        let destination = dsh_marina::selfupdate::staged_exe(&self.state.data_root, &version);
+        let Some((progress, cancel)) =
+            self.push_job(key.clone(), format!("DSH Marina {version}"), asset.size, cx)
+        else {
+            return;
+        };
+        if let Some(Dialog::Update { downloading, .. }) = self.dialog.as_mut() {
+            *downloading = true;
+        }
+        cx.notify();
+        let cancel_for_check = cancel.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let sha = match sha_url {
+                        Some(url) => dsh_marina::selfupdate::fetch_sha256(&url).ok(),
+                        None => None,
+                    };
+                    let mut report = |p: download::DownloadProgress| {
+                        if let Ok(mut slot) = progress.lock() {
+                            *slot = (p.downloaded, p.total.max(asset.size));
+                        }
+                    };
+                    dsh_marina::selfupdate::download_verified(
+                        &asset.browser_download_url,
+                        &destination,
+                        sha.as_deref(),
+                        &cancel,
+                        &mut report,
+                    )
+                    .map(|()| destination.clone())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_job(&key, cx);
+                match result {
+                    Ok(path) => {
+                        let cancelled = cancel_for_check.load(std::sync::atomic::Ordering::Relaxed);
+                        if cancelled {
+                            return;
+                        }
+                        if let Some(Dialog::Update { .. }) = this.dialog.as_ref() {
+                            this.dialog = None;
+                        }
+                        this.app_update.staged = Some(StagedUpdate {
+                            version: version.clone(),
+                            path,
+                        });
+                        this.dialog = Some(Dialog::UpdateReady { version });
+                        dsh_marina::applog::info("[Update] 新版本已下载并校验完成");
+                    }
+                    Err(e) => {
+                        dsh_marina::applog::warn(&format!("[Update] 下载更新失败：{e}"));
+                        if let Some(Dialog::Update {
+                            downloading, error, ..
+                        }) = this.dialog.as_mut()
+                        {
+                            *downloading = false;
+                            *error = Some(e);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 「重启并更新」：有实例在跑就先问，否则直接换文件并重启。
+    fn restart_and_update(&mut self, cx: &mut Context<Self>) {
+        let Some(staged) = self.app_update.staged.clone() else {
+            return;
+        };
+        let running: Vec<String> = self
+            .instances
+            .iter()
+            .filter(|instance| {
+                matches!(
+                    self.get_instance_status(&instance.id),
+                    InstanceStatus::Running
+                        | InstanceStatus::AdoptedRunning
+                        | InstanceStatus::Starting
+                        | InstanceStatus::Stopping
+                )
+            })
+            .map(|instance| instance.name.clone())
+            .collect();
+        if running.is_empty() {
+            self.apply_update_now(staged.path, cx);
+            return;
+        }
+        // Instances are running: explain, and offer to update on exit instead.
+        self.dialog = Some(Dialog::UpdateNeedsStop {
+            version: staged.version,
+            path: staged.path,
+            running,
+        });
+        cx.notify();
+    }
+
+    /// Swap the executable and start the new build; instances stop first.
+    fn apply_update_now(&mut self, staged: PathBuf, cx: &mut Context<Self>) {
+        self.last_success = Some("正在停止实例并重启到新版本…".to_owned());
+        self.dialog = None;
+        self.app_update.deferred = None;
+        cx.notify();
+        perform_quit(
+            StopMode::Graceful,
+            Some(Box::new(move |_state: &AppState| {
+                dsh_marina::selfupdate::apply_and_restart(&staged)
+            })),
+            cx,
+        );
+    }
+
+    /// 「稍后更新」：记住路径，用户点退出软件时再问一次。
+    fn defer_update(&mut self, cx: &mut Context<Self>) {
+        let Some(staged) = self.app_update.staged.clone() else {
+            return;
+        };
+        self.app_update.deferred = Some(staged.clone());
+        self.dialog = None;
+        self.last_success = Some(format!(
+            "已下载版本 {}。退出 Marina 时会提示安装",
+            staged.version
+        ));
+        cx.notify();
+    }
+
+    /// Called from the quit flow: offer the deferred update before exiting.
+    /// Returns whether a prompt was shown, so quitting waits for the answer.
+    fn ask_about_deferred_update(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(staged) = self.app_update.deferred.clone() else {
+            return false;
+        };
+        self.dialog = Some(Dialog::UpdateOnExit {
+            version: staged.version,
+            path: staged.path,
+        });
+        cx.notify();
+        true
     }
 
     /// Daily automatic update check (§FR-9).
@@ -4553,10 +4879,21 @@ fn main() {
         dsh_marina::applog::warn(&format!("排队 dsh:// 链接失败：{e}"));
     }
     let start_hidden = open_url.is_none() && std::env::args().any(|a| a == "--background");
-    let wait_for_restart = argument_value("--wait-for").is_some();
+    let wait_pid = argument_value("--wait-for").and_then(|pid| pid.parse::<u32>().ok());
+    if let Some(pid) = wait_pid {
+        // The build we replaced may still be shutting instances down.  Wait for
+        // it to really exit before taking the single-instance mutex, otherwise
+        // this process bows out and the update never comes up.
+        if !dsh_marina::platform::wait_for_process_exit(pid, Duration::from_secs(120)) {
+            dsh_marina::applog::warn(&format!(
+                "重启前等待旧进程 {pid} 退出超时，继续启动（可能与其争用同一个实例锁）"
+            ));
+        }
+    }
     let mut single_instance = platform::acquire_single_instance();
-    if wait_for_restart {
-        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    if wait_pid.is_some() {
+        // The mutex is released slightly after the process exits; retry briefly.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while single_instance.is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(300));
             single_instance = platform::acquire_single_instance();
@@ -4570,6 +4907,13 @@ fn main() {
     // Load backend state
     let state = Arc::new(AppState::new(&data_root));
     dsh_marina::i18n::init(&data_root);
+    // A previous update renamed the running exe to `.old`.  Keep it until this
+    // build has proven it starts, so a broken release can still be rolled back
+    // by renaming the file back.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        dsh_marina::selfupdate::cleanup_stale_backup();
+    });
     dsh_marina::applog::info(&format!(
         "DSH Marina {} 已启动，数据目录 {}",
         env!("CARGO_PKG_VERSION"),

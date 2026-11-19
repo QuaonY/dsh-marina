@@ -46,9 +46,15 @@ executable — no installer and no Visual C++ Redistributable required.
 
 ## Getting started
 
-1. Build `dsh-marina.exe` from [source](#building-from-source).
+1. Download the installer `dsh-marina-setup-v<version>-windows-x64.exe` and run it, or use the
+   portable `dsh-marina-v<version>-windows-x64.exe` from any folder.
 2. Create an instance and pick a DSH runtime version, or let Marina download one.
 3. Start the instance. Plugins, snapshots, packs, and the tray are all managed from this window.
+
+The installer asks for a folder, a desktop shortcut and a Start menu entry, and lands under
+"Apps and features". It defaults to `%LOCALAPPDATA%\Programs\DSH Marina`, where installing and
+updating need no administrator rights. Both editions share the same data folder, so you can switch
+between them at any time.
 
 ## Features
 
@@ -132,8 +138,19 @@ executable — no installer and no Visual C++ Redistributable required.
 
 ### About
 
-- Version, MIT license, repository link, the full third-party license list, and a manual update
-  check.
+- Version, MIT license, repository link, and the full third-party license list.
+
+### Updates
+
+- Marina checks GitHub Releases once per launch (and falls back to the CNB mirror when GitHub is
+  unreachable). A new version shows a red dot on the bell.
+- The update dialog shows the current and the new version, that release's notes, and a link to the
+  release page.
+- "Download and update" shows progress, verifies the SHA-256 published with the release, and then
+  offers "Restart and update" or "Later".
+- With instances running, restarting first asks; choosing "update on exit" installs the downloaded
+  build the next time Marina quits.
+- The check can be turned off under Settings → General.
 
 ## Data and privacy
 
@@ -190,6 +207,29 @@ still succeeds with a warning and the app uses a generic Windows icon.
 Release binaries are not code-signed, so Windows SmartScreen may ask for confirmation the first
 time the exe is run.
 
+### Packaging a release
+
+```powershell
+pwsh -File installer\build-release.ps1
+```
+
+This writes both artifacts into `dist\` along with their `.sha256` files:
+
+- `dsh-marina-v<version>-windows-x64.exe` — the portable build
+- `dsh-marina-setup-v<version>-windows-x64.exe` — the NSIS installer
+
+Building the installer needs [NSIS](https://nsis.sourceforge.io/) (`winget install NSIS.NSIS`);
+`installer\dsh-marina.nsi` is the script and takes the version as `/DVERSION=...`.
+
+After publishing, refresh the mirror manifest the updater falls back to:
+
+```powershell
+pwsh -File installer\write-update-json.ps1 -Tag v<version> -NotesFile notes.md
+```
+
+Commit and push `update.json`: GitHub is tried first, and this file is what a machine behind a
+blocked GitHub connection reads instead.
+
 ## Development
 
 ```powershell
@@ -210,6 +250,7 @@ Automated tests cover the core logic. The following still need a real Windows de
 - Tray behavior and GUI interactions
 - Process lifecycle details (Job Objects and window messages)
 - The GitHub sharing flow (Device Flow, Release upload, pull request)
+- Self-update: the executable swap, and the "update on exit" path
 
 ## Tech stack
 
@@ -220,6 +261,7 @@ Automated tests cover the core logic. The following still need a real Windows de
 | Windows integration | `windows` crate (Job Objects, registry, shell, process APIs) |
 | Networking | `reqwest` with native TLS and the Windows system proxy |
 | Data formats | serde, TOML, YAML, JSON, and ZIP |
+| Packaging | NSIS |
 
 ## Project layout
 
@@ -229,6 +271,7 @@ src/ui/         GPUI views, dialogs, and tab pages
 src/bin/        fake-desktop test double used by the integration tests
 tests/          process lifecycle integration tests
 assets/         logo, icons, screenshots, and the third-party license list
+installer/      NSIS script and the release packaging scripts
 ```
 
 ## Contributing

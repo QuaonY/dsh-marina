@@ -40,9 +40,11 @@ Marina 是独立的启动器，而不是 DSH 的分支：它使用隔离的路�
 
 ## 快速开始
 
-1. 从[源码](#从源码构建)构建 `dsh-marina.exe`。
+1. 下载安装包 `dsh-marina-setup-v<版本>-windows-x64.exe` 运行安装，或直接用便携版 `dsh-marina-v<版本>-windows-x64.exe`。
 2. 新建实例，并选择 DSH 运行时版本，或让 Marina 自动下载。
 3. 启动实例。插件、快照、整合包和托盘都在同一个窗口里管理。
+
+安装时可以选安装目录、是否创建桌面快捷方式、是否放进开始菜单，装完会出现在「应用和功能」里。默认装到 `%LOCALAPPDATA%\Programs\DSH Marina`，在这个位置安装和更新都不需要管理员权限。安装版和便携版共用同一份数据目录，可以随时互换。
 
 ## 功能
 
@@ -106,7 +108,15 @@ Marina 是独立的启动器，而不是 DSH 的分支：它使用隔离的路�
 
 ### 关于
 
-- 显示版本、MIT 许可证、仓库地址、完整的第三方许可清单，并支持手动检查更新。
+- 显示版本、MIT 许可证、仓库地址和完整的第三方许可清单。
+
+### 版本更新
+
+- 每次启动 Marina 时检查一次 GitHub Releases（GitHub 连不上时改查 CNB 镜像）。发现新版本会在消息铃铛上亮红点。
+- 更新弹窗显示当前版本和新版本、这一版的更新说明，以及跳转到 GitHub 的链接。
+- 「下载并更新」会显示进度，并用发布时附带的 SHA-256 校验，完成后提供「重启并更新」和「稍后更新」。
+- 有实例在运行时点重启会先提示；选「退出时再更新」会在下次退出 Marina 时安装。
+- 可以在「设置 > 通用」里关掉自动检查。
 
 ## 数据与隐私
 
@@ -155,6 +165,27 @@ cargo build --release
 
 发布版没有代码签名，首次运行时 Windows SmartScreen 可能会要求确认。
 
+### 打包发布
+
+```powershell
+pwsh -File installer\build-release.ps1
+```
+
+会在 `dist\` 下生成两份产物和各自的 `.sha256`：
+
+- `dsh-marina-v<版本>-windows-x64.exe`：便携版
+- `dsh-marina-setup-v<版本>-windows-x64.exe`：NSIS 安装包
+
+构建安装包需要 [NSIS](https://nsis.sourceforge.io/)（`winget install NSIS.NSIS`），脚本在 `installer\dsh-marina.nsi`，版本通过 `/DVERSION=...` 传入。
+
+发布之后刷新自动更新回退用的镜像清单：
+
+```powershell
+pwsh -File installer\write-update-json.ps1 -Tag v<版本> -NotesFile notes.md
+```
+
+提交并推送 `update.json`：客户端会先查 GitHub，连不上的机器读的就是这个文件。
+
 ## 开发
 
 ```powershell
@@ -174,6 +205,7 @@ cargo run
 - `dsh plugin` CLI 集成
 - 托盘行为和界面交互
 - 进程生命周期细节（Job Object 和窗口消息）
+- 自更新：替换可执行文件，以及「退出时再更新」
 - GitHub 分享流程（Device Flow、Release 上传、Pull Request）
 
 ## 技术栈
@@ -185,6 +217,7 @@ cargo run
 | Windows 集成 | `windows` crate（Job Object、注册表、Shell、进程 API） |
 | 网络 | `reqwest`，使用原生 TLS 和 Windows 系统代理 |
 | 数据格式 | serde、TOML、YAML、JSON 和 ZIP |
+| 安装包 | NSIS |
 
 ## 项目结构
 
@@ -194,6 +227,7 @@ src/ui/         GPUI 视图、对话框和标签页
 src/bin/        集成测试使用的 fake-desktop 测试替身
 tests/          进程生命周期集成测试
 assets/         图标、Logo、截图和第三方许可清单
+installer/      NSIS 脚本和发布打包脚本
 ```
 
 ## 参与贡献

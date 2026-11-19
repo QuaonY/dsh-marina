@@ -687,6 +687,7 @@ impl Render for MarinaWindow {
                         Dialog::SharePack { busy, .. } => *busy,
                         Dialog::NewInstance(inner) => inner.busy,
                         Dialog::SwitchRuntime(inner) => inner.busy,
+                        Dialog::Update { downloading, .. } => *downloading,
                         Dialog::GitHubLogin { connecting, .. } => *connecting,
                         _ => false,
                     };
@@ -1151,6 +1152,59 @@ impl MarinaWindow {
                         )
                 });
         let empty = self.notices.history.is_empty();
+        // A new release is pinned above the log: it stays until acted on.
+        let update_row = self.app_update.latest.as_ref().and_then(|release| {
+            self.update_available(release).map(|(version, _)| {
+                let version = version.to_owned();
+                let staged = self
+                    .app_update
+                    .staged
+                    .as_ref()
+                    .is_some_and(|staged| staged.version == version);
+                let label = if staged {
+                    format!("{version} 已下载，重启即可更新")
+                } else {
+                    format!("发现新版本 {version}")
+                };
+                clickable(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(16.))
+                        .py(px(11.))
+                        .border_b_1()
+                        .border_color(rgb(BORDER_SUBTLE))
+                        .bg(rgb(PRIMARY_MUTED))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .size(px(7.))
+                                .rounded_full()
+                                .bg(rgb(PRIMARY)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(PRIMARY))
+                                        .child(label),
+                                )
+                                .child(hint("点击查看更新内容").text_size(px(10.5))),
+                        )
+                        .child(hint("查看").text_size(px(11.5))),
+                    true,
+                    cx.listener(|this, _, _, cx| this.open_or_apply_update(cx)),
+                )
+            })
+        });
         let panel = div()
             .flex()
             .flex_col()
@@ -1181,6 +1235,7 @@ impl MarinaWindow {
                         }),
                     )),
             )
+            .when_some(update_row, |el, row| el.child(row))
             .when(empty, |el| {
                 el.child(
                     div()
