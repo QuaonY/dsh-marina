@@ -1,32 +1,32 @@
 {
   "assets": [
     {
-      "browser_download_url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-setup-v0.1.3-windows-x64.exe",
-      "name": "dsh-marina-setup-v0.1.3-windows-x64.exe",
-      "size": 9764862
+      "browser_download_url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.4/dsh-marina-setup-v0.1.4-windows-x64.exe",
+      "name": "dsh-marina-setup-v0.1.4-windows-x64.exe",
+      "size": 9832311
     },
     {
-      "browser_download_url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-setup-v0.1.3-windows-x64.exe.sha256",
-      "name": "dsh-marina-setup-v0.1.3-windows-x64.exe.sha256",
+      "browser_download_url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.4/dsh-marina-setup-v0.1.4-windows-x64.exe.sha256",
+      "name": "dsh-marina-setup-v0.1.4-windows-x64.exe.sha256",
       "size": 105
     }
   ],
-  "body": "This release adds a home dashboard, batch controls and download pause/resume.\n\n- Home dashboard: per-instance color bar, status dot, memory sparkline and live usage for running instances.\n- Home search box (filter by name) plus \"Start all / Stop all\" batch actions.\n- Global shortcuts: Ctrl/Cmd+N new instance, Ctrl/Cmd+, open settings.\n- Downloads support pause / resume: pausing keeps the partial file for resuming; only cancel cleans up.\n- Home empty-state guidance (brand mark + new-instance button).\n- Network clients reused per timeout; monitor polling adapts (idle 6s / active 2s).\n- Theme palette split into its own module.\n- Cancelling an unfinished download no longer leaves a broken instance in the list.\n\n中文\n\n本版新增首页仪表盘、批量操作与下载暂停/继续。\n\n- 首页仪表盘：实例色条、状态点、运行中实例的内存迷你曲线与实时占用。\n- 首页搜索框（按名称过滤）与「全部启动 / 全部停止」批量操作。\n- 全局快捷键：Ctrl/Cmd+N 新建实例，Ctrl/Cmd+, 打开设置。\n- 下载支持「暂停 / 继续」：暂停保留已下载部分可续传，取消才清理未完成文件与待装实例。\n- 首页空状态引导（品牌标识 + 新建实例按钮）。\n- 网络客户端按超时复用；监控轮询自适应降频（空闲 6s / 活跃 2s）。\n- 主题色板拆分为独立模块，便于维护。\n- 取消未完成的下载不再在实例列表留下损坏实例。\n",
-  "html_url": "https://github.com/QuaonY/dsh-marina/releases/tag/v0.1.3",
-  "notes": "This release adds a home dashboard, batch controls and download pause/resume.\n\n- Home dashboard: per-instance color bar, status dot, memory sparkline and live usage for running instances.\n- Home search box (filter by name) plus \"Start all / Stop all\" batch actions.\n- Global shortcuts: Ctrl/Cmd+N new instance, Ctrl/Cmd+, open settings.\n- Downloads support pause / resume: pausing keeps the partial file for resuming; only cancel cleans up.\n- Home empty-state guidance (brand mark + new-instance button).\n- Network clients reused per timeout; monitor polling adapts (idle 6s / active 2s).\n- Theme palette split into its own module.\n- Cancelling an unfinished download no longer leaves a broken instance in the list.\n\n中文\n\n本版新增首页仪表盘、批量操作与下载暂停/继续。\n\n- 首页仪表盘：实例色条、状态点、运行中实例的内存迷你曲线与实时占用。\n- 首页搜索框（按名称过滤）与「全部启动 / 全部停止」批量操作。\n- 全局快捷键：Ctrl/Cmd+N 新建实例，Ctrl/Cmd+, 打开设置。\n- 下载支持「暂停 / 继续」：暂停保留已下载部分可续传，取消才清理未完成文件与待装实例。\n- 首页空状态引导（品牌标识 + 新建实例按钮）。\n- 网络客户端按超时复用；监控轮询自适应降频（空闲 6s / 活跃 2s）。\n- 主题色板拆分为独立模块，便于维护。\n- 取消未完成的下载不再在实例列表留下损坏实例。\n",
+  "body": "This release makes deleted-instance data recoverable, steadies the frame rate, and refreshes the look.\n\n- Restorable trash: deleting with \"keep data\" now keeps a recoverable copy for 30 days. A new \"Trash\" entry at the bottom of the sidebar (with a count badge) opens a dedicated page where kept instances can be restored or permanently deleted. Restore rebuilds the instance with its home data and configuration.\n- Steadier frame rate: per-frame and periodic overhead was trimmed, markedly reducing stutter and large frame-rate swings across all screens.\n- The sidebar memory gauge now shows real whole-system memory usage (used / total) instead of only the running-instance sum, so it no longer reads a misleading 0 when idle; a sub-line shows how much of that is your instances.\n- Refined light and dark palettes for better card depth and text contrast, improving overall display quality.\n\n中文\n\n本版让「保留数据后删除」的实例可以恢复，显著稳定帧率，并微调了整体观感。\n\n- 可恢复的回收站：选择「保留数据后删除」的实例会保留 30 天可恢复副本。侧边栏底部新增「回收站」入口（带数量徽标），打开独立页面可恢复或彻底删除。恢复会重建实例并放回 home 数据与配置。\n- 帧率更稳：并精简每帧与周期性开销，各界面的卡顿与帧率大幅波动明显减少。\n- 侧边栏内存栏改为显示整机真实内存占用（已用 / 总量），不再只统计运行中实例、空闲时误显 0；下方小字标出其中实例占用。\n- 微调浅色 / 深色配色，提升卡片层次与文字对比度，优化显示效果。\n",
+  "html_url": "https://github.com/QuaonY/dsh-marina/releases/tag/v0.1.4",
+  "notes": "This release makes deleted-instance data recoverable, steadies the frame rate, and refreshes the look.\n\n- Restorable trash: deleting with \"keep data\" now keeps a recoverable copy for 30 days. A new \"Trash\" entry at the bottom of the sidebar (with a count badge) opens a dedicated page where kept instances can be restored or permanently deleted. Restore rebuilds the instance with its home data and configuration.\n- Steadier frame rate: per-frame and periodic overhead was trimmed, markedly reducing stutter and large frame-rate swings across all screens.\n- The sidebar memory gauge now shows real whole-system memory usage (used / total) instead of only the running-instance sum, so it no longer reads a misleading 0 when idle; a sub-line shows how much of that is your instances.\n- Refined light and dark palettes for better card depth and text contrast, improving overall display quality.\n\n中文\n\n本版让「保留数据后删除」的实例可以恢复，显著稳定帧率，并微调了整体观感。\n\n- 可恢复的回收站：选择「保留数据后删除」的实例会保留 30 天可恢复副本。侧边栏底部新增「回收站」入口（带数量徽标），打开独立页面可恢复或彻底删除。恢复会重建实例并放回 home 数据与配置。\n- 帧率更稳：并精简每帧与周期性开销，各界面的卡顿与帧率大幅波动明显减少。\n- 侧边栏内存栏改为显示整机真实内存占用（已用 / 总量），不再只统计运行中实例、空闲时误显 0；下方小字标出其中实例占用。\n- 微调浅色 / 深色配色，提升卡片层次与文字对比度，优化显示效果。\n",
   "platforms": {
     "macos-aarch64": {
       "format": "app",
-      "signature": "8b0a5e1ac384f4c9c7bc4f36d20e3ceea213ffeabcc071aafb9acecefe593af0",
-      "url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-v0.1.3-macos-aarch64.app.tar.gz"
+      "signature": "c2b87f65602fece87533a2b6017b9f1838f2e56f17aa0f6788b3477a16a19c31",
+      "url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.4/dsh-marina-v0.1.4-macos-aarch64.app.tar.gz"
     },
     "windows-x86_64": {
       "format": "nsis",
-      "signature": "ee10547bc2ec117cab8a9ff6f870c018feb2714dc6749733a83c1de183bd52dc",
-      "url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-setup-v0.1.3-windows-x64.exe"
+      "signature": "eba51507ecfe1dfe737dd34a4b32431c35948ae84422a05fd1c347b2dce719da",
+      "url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.4/dsh-marina-setup-v0.1.4-windows-x64.exe"
     }
   },
-  "pub_date": "2026-11-20T10:04:38Z",
-  "tag_name": "v0.1.3",
-  "version": "0.1.3"
+  "pub_date": "2026-11-20T15:38:40Z",
+  "tag_name": "v0.1.4",
+  "version": "0.1.4"
 }
