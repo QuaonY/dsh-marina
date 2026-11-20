@@ -14,8 +14,8 @@
 # 免费 ad-hoc 签名（无 Apple Developer 账号）：Homebrew 4.7+ 不再支持
 # --no-quarantine，首次打开仍需在「系统设置 → 隐私与安全性」放行（见 README）。
 cask "dsh-marina" do
-  version "0.1.3"
-  sha256 :no_check
+  version "0.1.4"
+  sha256 "c73dd664ea82125ee0d405977f7f2fdf7f3234269659083bd85d8c56a2c30226"
 
   url "https://github.com/QuaonY/dsh-marina/releases/download/v#{version}/dsh-marina-v#{version}-macos-aarch64.dmg"
   name "DSH Marina"
