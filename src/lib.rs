@@ -14,6 +14,8 @@ pub mod i18n;
 pub mod instances;
 
 pub mod launch;
+#[cfg(windows)]
+pub mod legacy_install;
 pub mod links;
 pub mod logs;
 pub mod market;
@@ -22,14 +24,13 @@ pub mod packs;
 pub mod plugins;
 pub mod relocate;
 
-#[cfg(windows)]
 pub mod platform;
 
-#[cfg(windows)]
 pub mod process;
 
 pub mod runtime;
 pub mod runtimes;
+pub mod secure_store;
 pub mod selfupdate;
 pub mod sensitive;
 pub mod settings;

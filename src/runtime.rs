@@ -38,7 +38,7 @@ impl RuntimeSettingsStore {
         })?;
         toml::from_str(&content).map_err(|source| RuntimeSettingsError::ParseSettings {
             path: self.settings_file.clone(),
-            source,
+            source: Box::new(source),
         })
     }
 
@@ -112,7 +112,8 @@ pub enum RuntimeSettingsError {
     ParseSettings {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        // Boxed: toml::de::Error is large and would bloat every Result using this error.
+        source: Box<toml::de::Error>,
     },
     #[error("写入运行时设置失败：{0}")]
     SerializeSettings(#[from] toml::ser::Error),

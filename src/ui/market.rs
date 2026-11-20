@@ -298,19 +298,7 @@ impl MarinaWindow {
 
         let body = match (&self.market.index, &self.market.error) {
             (None, Some(error)) => self.render_market_error(error, cx),
-            (None, None) => div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(10.))
-                .py(px(60.))
-                .child(
-                    svg()
-                        .path("icons/loader-circle.svg")
-                        .size(px(26.))
-                        .text_color(rgb(PRIMARY)),
-                )
-                .child(hint("正在读取插件列表（约 3 MB，第一次会慢一些）…")),
+            (None, None) => loading_block("正在读取插件列表（约 3 MB，第一次会慢一些）…", "market"),
             (Some(index), error) => {
                 let mut body = div().flex().flex_col().gap(px(14.));
                 // 已有缓存时刷新失败：保留旧列表，但把原因说出来。
@@ -361,7 +349,7 @@ impl MarinaWindow {
                         .max_w(px(560.))
                         .text_center()
                         .text_size(px(12.))
-                        .text_color(rgb(DANGER))
+                        .text_color(rgb(t!(DANGER)))
                         .child(error.to_owned()),
                 )
                 .child(hint(
@@ -398,15 +386,15 @@ impl MarinaWindow {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(active, |el| {
-                        el.border_color(rgb(PRIMARY))
-                            .bg(rgb(PRIMARY_MUTED))
-                            .text_color(rgb(PRIMARY))
+                        el.border_color(rgb(t!(PRIMARY)))
+                            .bg(rgb(t!(PRIMARY_MUTED)))
+                            .text_color(rgb(t!(PRIMARY)))
                     })
                     .when(!active, |el| {
-                        el.border_color(rgb(BORDER_SUBTLE))
-                            .bg(rgb(BG_CARD))
-                            .text_color(rgb(TEXT_2))
-                            .hover(|s| s.border_color(rgb(BORDER)).text_color(rgb(TEXT)))
+                        el.border_color(rgb(t!(BORDER_SUBTLE)))
+                            .bg(rgb(t!(BG_CARD)))
+                            .text_color(rgb(t!(TEXT_2)))
+                            .hover(|s| s.border_color(rgb(t!(BORDER))).text_color(rgb(t!(TEXT))))
                     })
                     .child(label);
                 // 已选中的分类再点一次没有意义：不给它指针和点击处理。
@@ -468,7 +456,7 @@ impl MarinaWindow {
                                 svg()
                                     .path("icons/search.svg")
                                     .size(px(14.))
-                                    .text_color(rgb(TEXT_3)),
+                                    .text_color(rgb(t!(TEXT_3))),
                             )
                             .cleanable(true)
                     })),
@@ -536,7 +524,7 @@ impl MarinaWindow {
             } else if self.market.stats.is_some() {
                 parts.push("下载量为 npm 近 30 天".to_owned());
             }
-            hint(parts.join(" · ")).when(index.stale, |el| el.text_color(rgb(ACCENT)))
+            hint(parts.join(" · ")).when(index.stale, |el| el.text_color(rgb(t!(ACCENT))))
         };
 
         let pager = (pages > 1).then(|| {
@@ -584,7 +572,7 @@ impl MarinaWindow {
                             .items_center()
                             .gap(px(8.))
                             .py(px(40.))
-                            .child(svg().path("icons/puzzle.svg").size(px(28.)).text_color(rgb(TEXT_3)))
+                            .child(svg().path("icons/puzzle.svg").size(px(28.)).text_color(rgb(t!(TEXT_3))))
                             .child(hint("没有符合条件的插件，换个关键词或分类试试")),
                     ),
                 )
@@ -642,8 +630,8 @@ impl MarinaWindow {
                     .items_center()
                     .gap(px(4.))
                     .text_size(px(12.))
-                    .text_color(rgb(TEXT_2))
-                    .child(svg().path(icon).size(px(13.)).text_color(rgb(TEXT_3)))
+                    .text_color(rgb(t!(TEXT_2)))
+                    .child(svg().path(icon).size(px(13.)).text_color(rgb(t!(TEXT_3))))
                     .child(format!(
                         "{}{tip}",
                         value.map(compact_count).unwrap_or_else(|| "—".to_owned())
@@ -705,9 +693,9 @@ impl MarinaWindow {
             .p(px(16.))
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER_SUBTLE))
-            .bg(rgb(BG_CARD))
-            .hover(|s| s.border_color(rgb(BORDER)).bg(rgb(BG_ROW_HOVER)))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
+            .bg(rgb(t!(BG_CARD)))
+            .hover(|s| s.border_color(rgb(t!(BORDER))).bg(rgb(t!(BG_ROW_HOVER))))
             .child(
                 div()
                     .flex()
@@ -755,7 +743,7 @@ impl MarinaWindow {
                     .max_h(px(36.))
                     .overflow_hidden()
                     .text_size(px(12.5))
-                    .text_color(rgb(TEXT_2))
+                    .text_color(rgb(t!(TEXT_2)))
                     .line_height(px(18.))
                     .line_clamp(2)
                     .child(if plugin.description().is_empty() {
@@ -782,7 +770,7 @@ impl MarinaWindow {
                             .min_w(px(0.))
                             .truncate()
                             .text_size(px(11.))
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .font_family(MONO)
                             .child(plugin.name.clone()),
                     )
@@ -795,12 +783,12 @@ impl MarinaWindow {
                                 .justify_center()
                                 .size(px(30.))
                                 .rounded(px(7.))
-                                .hover(|s| s.bg(rgb(BG_HOVER)))
+                                .hover(|s| s.bg(rgb(t!(BG_HOVER))))
                                 .child(
                                     svg()
                                         .path("icons/external-link.svg")
                                         .size(px(14.))
-                                        .text_color(rgb(TEXT_2)),
+                                        .text_color(rgb(t!(TEXT_2))),
                                 ),
                             true,
                             cx.listener(move |_, _, _, cx| cx.open_url(&homepage)),

@@ -1,6 +1,6 @@
 [package]
 name = "dsh-marina"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.88"
 description = "DSH Marina：为 DSH 管理多个独立实例、插件与整合包，并一键分享到社区"
@@ -11,10 +11,15 @@ homepage = "https://github.com/QuaonY/dsh-marina"
 build = "build.rs"
 default-run = "dsh-marina"
 
+[workspace]
+members = ["xtask"]
+resolver = "3"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 base64 = "0.22"
+cargo-packager-updater = { version = "0.2.3", default-features = false, features = ["native-tls"] }
 gpui-kit = "=0.8.1"
 gpui-tray = { version = "0.3.0", default-features = false, features = ["gpui-kit", "menu-state"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -33,11 +38,62 @@ toml = "0.8"
 trash = "5"
 uuid = { version = "1", features = ["v4"] }
 raw-window-handle = "=0.6.2"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+security-framework = "3"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
 
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+icns = { version = "0.3", features = ["pngio"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+# 便携版单文件直接分发，自更新也要整包下载：用体积换发布和下载成本。
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# cargo-packager 双端打包。具体格式由 xtask 按平台传入：
+# Windows → nsis，macOS → app,dmg。签名身份留空 = 免费 ad-hoc 签名。
+[package.metadata.packager]
+product_name = "DSH Marina"
+identifier = "com.quaon.dsh-marina"
+publisher = "Quaon"
+description = "为 DSH 管理多个独立实例、插件与整合包，并一键分享到社区"
+homepage = "https://github.com/QuaonY/dsh-marina"
+authors = ["Quaon"]
+license_file = "LICENSE"
+icons = ["assets/marina.ico", "assets/marina.icns", "assets/logo.png"]
+resources = ["LICENSE", "README.md", "README.zh-CN.md"]
+out_dir = "target/packager"
+
+# dsh:// 深度链接：Windows 写注册表，macOS 写 Info.plist CFBundleURLTypes。
+[[package.metadata.packager.deep_link_protocols]]
+schemes = ["dsh"]
+name = "DSH Marina"
+
+[package.metadata.packager.nsis]
+installer_mode = "currentUser"
+languages = ["SimpChinese", "English"]
+display_language_selector = true
+installer_icon = "assets/marina.ico"
+# 自定义模板：修复中文字体裁切/过挤（SetFont 雅黑 9pt + DPI 感知）。
+template = "packaging/nsis/installer.nsi"
+# 卸载时原生询问是否删除数据目录（默认不勾），与旧 NSIS 行为一致。
+appdata_paths = ["$PROFILE/.dsh-marina"]
+# 安装前结束正在运行的 Marina 由 cargo-packager 内置的 CheckIfAppIsRunning 宏
+# 负责（nsis_tauri_utils::KillProcess），无需自定义 preinstall_section。
+
+[package.metadata.packager.macos]
+minimum_system_version = "13.0"
+# signing_identity 留空：cargo-packager 走 ad-hoc 签名，无需 Apple Developer 账号。
+# 用户首次打开需在「系统设置 → 隐私与安全性」放行（见 README）。

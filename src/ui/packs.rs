@@ -34,6 +34,16 @@ impl MarinaWindow {
             .filter(|i| self.get_instance_status(&i.id) == InstanceStatus::Crashed)
             .count();
         let memory: u64 = self.memory.values().sum();
+        let search = self
+            .home_search
+            .as_ref()
+            .map(|e| e.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default();
+        let shown = self
+            .instances
+            .iter()
+            .filter(|i| search.is_empty() || i.name.to_lowercase().contains(&search))
+            .count();
 
         let stat_card = |label: &str, value: String, color: u32| {
             div()
@@ -44,8 +54,8 @@ impl MarinaWindow {
                 .p(px(18.))
                 .rounded(px(12.))
                 .border_1()
-                .border_color(rgb(BORDER_SUBTLE))
-                .bg(rgb(BG_CARD))
+                .border_color(rgb(t!(BORDER_SUBTLE)))
+                .bg(rgb(t!(BG_CARD)))
                 .child(hint(tr(label)))
                 .child(
                     div()
@@ -58,70 +68,192 @@ impl MarinaWindow {
         let stats = div()
             .flex()
             .gap(px(14.))
-            .child(stat_card("实例", total.to_string(), TEXT))
-            .child(stat_card("运行中", running.to_string(), SUCCESS))
+            .child(stat_card("实例", total.to_string(), t!(TEXT)))
+            .child(stat_card("运行中", running.to_string(), t!(SUCCESS)))
             .child(stat_card(
                 "需要处理",
                 crashed.to_string(),
-                if crashed > 0 { DANGER } else { TEXT_3 },
+                if crashed > 0 { t!(DANGER) } else { t!(TEXT_3) },
             ))
-            .child(stat_card("内存占用", storage::format_bytes(memory), TEXT));
+            .child(stat_card(
+                "实例内存",
+                storage::format_bytes(memory),
+                t!(TEXT),
+            ));
 
-        let rows = self.instances.iter().enumerate().map(|(index, instance)| {
-            let status = self.get_instance_status(&instance.id);
-            let (open_id, start_id) = (instance.id.clone(), instance.id.clone());
-            let control = if is_running(&status) {
-                clickable(
-                    btn("切到窗口", Tone::Default, true),
-                    true,
-                    cx.listener(move |this, _, _, cx| this.focus_instance(&start_id, cx)),
-                )
-            } else {
-                clickable(
-                    btn("启动", Tone::Primary, true),
-                    !is_busy(&status),
-                    cx.listener(move |this, _, _, cx| {
-                        this.start_instance(start_id.clone(), false, cx)
-                    }),
-                )
-            };
-            row_item(index == 0)
-                .child(badge(
-                    &badge_text(instance),
-                    hex_color(&instance.color),
-                    36.,
-                ))
-                .child(
+        let rows = self
+            .instances
+            .iter()
+            .filter(|i| search.is_empty() || i.name.to_lowercase().contains(&search))
+            .enumerate()
+            .map(|(index, instance)| {
+                let status = self.get_instance_status(&instance.id);
+                let (open_id, start_id) = (instance.id.clone(), instance.id.clone());
+                let control = if is_running(&status) {
+                    clickable(
+                        btn("切到窗口", Tone::Default, true),
+                        true,
+                        cx.listener(move |this, _, _, cx| this.focus_instance(&start_id, cx)),
+                    )
+                } else {
+                    clickable(
+                        btn("启动", Tone::Primary, true),
+                        !is_busy(&status),
+                        cx.listener(move |this, _, _, cx| {
+                            this.start_instance(start_id.clone(), false, cx)
+                        }),
+                    )
+                };
+                let mem = self.memory.get(&instance.id).copied().unwrap_or(0);
+                let hist: Vec<u64> = self
+                    .memory_history
+                    .get(&instance.id)
+                    .map(|d| d.iter().copied().collect())
+                    .unwrap_or_default();
+                let running_now = is_running(&status);
+                row_item(index == 0)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(3.))
+                            .h(px(30.))
+                            .rounded_full()
+                            .bg(rgb(hex_color(&instance.color))),
+                    )
+                    .child(badge(
+                        &badge_text(instance),
+                        hex_color(&instance.color),
+                        36.,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .truncate()
+                                    .child(instance.name.clone()),
+                            )
+                            .child(hint(runtime_label(&instance.runtime.dsh_version)).truncate()),
+                    )
+                    .child(status_dot(&status))
+                    .child(status_pill(&status))
+                    .when(running_now, |el| {
+                        el.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .flex_shrink_0()
+                                .child(sparkline(&hist, t!(SUCCESS)))
+                                .child(hint(storage::format_bytes(mem))),
+                        )
+                    })
+                    .child(clickable(
+                        btn("详情", Tone::Default, true),
+                        true,
+                        cx.listener(move |this, _, _, cx| {
+                            this.select_instance(open_id.clone(), cx)
+                        }),
+                    ))
+                    .child(control)
+            });
+        let list = card()
+            .child(card_head(
+                "全部实例",
+                hint(if search.is_empty() {
+                    format!("共 {total} 个")
+                } else {
+                    format!("匹配 {shown} / {total} 个")
+                }),
+            ))
+            .when(total == 0, |el| {
+                el.child(
                     div()
                         .flex()
                         .flex_col()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .gap(px(2.))
+                        .items_center()
+                        .gap(px(12.))
+                        .py(px(48.))
+                        .child(brand_mark(40.))
                         .child(
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .truncate()
-                                .child(instance.name.clone()),
+                                .child(tr("还没有实例")),
                         )
-                        .child(hint(runtime_label(&instance.runtime.dsh_version)).truncate()),
+                        .child(hint(
+                            "新建一个，或者到「整合包」里一键使用社区分享的配置组合。",
+                        ))
+                        .child(clickable(
+                            btn("新建实例", Tone::Primary, false),
+                            true,
+                            cx.listener(|this, _, window, cx| this.open_new_dialog(window, cx)),
+                        )),
                 )
-                .child(status_pill(&status))
-                .child(clickable(
-                    btn("详情", Tone::Default, true),
-                    true,
-                    cx.listener(move |this, _, _, cx| this.select_instance(open_id.clone(), cx)),
-                ))
-                .child(control)
-        });
-        let list = card()
-            .child(card_head("全部实例", hint(format!("共 {total} 个"))))
-            .when(total == 0, |el| {
-                el.child(div().p(px(20.)).child(hint(
-                    "还没有实例。新建一个，或者到「整合包」里一键使用社区分享的配置组合。",
-                )))
+            })
+            .when(total > 0 && shown == 0, |el| {
+                el.child(
+                    div()
+                        .p(px(20.))
+                        .child(hint(format!("没有名称包含「{search}」的实例"))),
+                )
             })
             .children(rows);
+
+        let toolbar = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .children(self.home_search.as_ref().map(|input| {
+                        Input::new(input).cleanable(true).prefix(
+                            svg()
+                                .path("icons/search.svg")
+                                .size(px(14.))
+                                .text_color(rgb(t!(TEXT_3))),
+                        )
+                    })),
+            )
+            .child(clickable(
+                btn("全部启动", Tone::Default, true),
+                true,
+                cx.listener(|this, _, _, cx| {
+                    let ids: Vec<String> = this
+                        .instances
+                        .iter()
+                        .filter(|i| {
+                            let s = this.get_instance_status(&i.id);
+                            !is_running(&s) && !is_busy(&s)
+                        })
+                        .map(|i| i.id.clone())
+                        .collect();
+                    for id in ids {
+                        this.start_instance(id, false, cx);
+                    }
+                }),
+            ))
+            .child(clickable(
+                btn("全部停止", Tone::Default, true),
+                true,
+                cx.listener(|this, _, _, cx| {
+                    let ids: Vec<String> = this
+                        .instances
+                        .iter()
+                        .filter(|i| is_running(&this.get_instance_status(&i.id)))
+                        .map(|i| i.id.clone())
+                        .collect();
+                    for id in ids {
+                        this.stop_instance(id, crate::STOP_GRACE, cx);
+                    }
+                }),
+            ));
 
         let page = div()
             .flex()
@@ -158,6 +290,7 @@ impl MarinaWindow {
                             ),
                     )
                     .child(stats)
+                    .child(toolbar)
                     .child(list),
             )
             .overflow_y_scrollbar();
@@ -295,7 +428,7 @@ impl MarinaWindow {
         }
         let address = self.catalog_url(cx);
         let key = format!("pack:{}", entry.id);
-        let Some((progress, cancel)) = self.push_job(
+        let Some((progress, cancel, _pause)) = self.push_job(
             key.clone(),
             format!("整合包「{}」", entry.name),
             entry.size,
@@ -303,7 +436,7 @@ impl MarinaWindow {
         ) else {
             return;
         };
-        self.packs.downloading = Some((entry.id.clone(), progress.clone(), cancel.clone()));
+        self.packs.downloading = Some((entry.id.clone(), (progress.clone(), cancel.clone())));
         self.last_error = None;
         cx.notify();
 
@@ -346,7 +479,7 @@ impl MarinaWindow {
     }
 
     fn cancel_pack_download(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, _, cancel)) = &self.packs.downloading {
+        if let Some((_, (_, cancel))) = &self.packs.downloading {
             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         cx.notify();
@@ -559,15 +692,15 @@ impl MarinaWindow {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(active, |el| {
-                        el.border_color(rgb(PRIMARY))
-                            .bg(rgb(PRIMARY_MUTED))
-                            .text_color(rgb(PRIMARY))
+                        el.border_color(rgb(t!(PRIMARY)))
+                            .bg(rgb(t!(PRIMARY_MUTED)))
+                            .text_color(rgb(t!(PRIMARY)))
                     })
                     .when(!active, |el| {
-                        el.border_color(rgb(BORDER_SUBTLE))
-                            .bg(rgb(BG_CARD))
-                            .text_color(rgb(TEXT_2))
-                            .hover(|s| s.border_color(rgb(BORDER)).text_color(rgb(TEXT)))
+                        el.border_color(rgb(t!(BORDER_SUBTLE)))
+                            .bg(rgb(t!(BG_CARD)))
+                            .text_color(rgb(t!(TEXT_2)))
+                            .hover(|s| s.border_color(rgb(t!(BORDER))).text_color(rgb(t!(TEXT))))
                     })
                     .child(label),
                 true,
@@ -599,7 +732,7 @@ impl MarinaWindow {
                                 svg()
                                     .path("icons/search.svg")
                                     .size(px(14.))
-                                    .text_color(rgb(TEXT_3)),
+                                    .text_color(rgb(t!(TEXT_3))),
                             )
                             .cleanable(true)
                     })),
@@ -629,7 +762,7 @@ impl MarinaWindow {
                             .max_w(px(560.))
                             .text_center()
                             .text_size(px(12.))
-                            .text_color(rgb(DANGER))
+                            .text_color(rgb(t!(DANGER)))
                             .child(e.clone()),
                     )
                     .child(hint(
@@ -641,19 +774,7 @@ impl MarinaWindow {
                         cx.listener(|this, _, _, cx| this.refresh_catalog(cx)),
                     )),
             ),
-            (None, true) => div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(10.))
-                .py(px(60.))
-                .child(
-                    svg()
-                        .path("icons/loader-circle.svg")
-                        .size(px(26.))
-                        .text_color(rgb(PRIMARY)),
-                )
-                .child(hint("正在读取社区整合包列表…")),
+            (None, true) => loading_block("正在读取社区整合包列表…", "packs"),
             (None, false) => card().child(
                 div()
                     .flex()
@@ -689,7 +810,7 @@ impl MarinaWindow {
                             svg()
                                 .path("icons/inbox.svg")
                                 .size(px(28.))
-                                .text_color(rgb(TEXT_3)),
+                                .text_color(rgb(t!(TEXT_3))),
                         )
                         .child(hint(match self.packs.filter {
                             crate::PacksFilter::All => "没有符合条件的整合包，换个关键词试试",
@@ -736,10 +857,15 @@ impl MarinaWindow {
                         .px(px(16.))
                         .py(px(12.))
                         .rounded(px(8.))
-                        .bg(rgb(ERROR_BG))
+                        .bg(rgb(t!(ERROR_BG)))
                         .border_1()
-                        .border_color(rgb(ERROR_BORDER))
-                        .child(div().text_color(rgb(DANGER)).text_size(px(13.)).child(err)),
+                        .border_color(rgb(t!(ERROR_BORDER)))
+                        .child(
+                            div()
+                                .text_color(rgb(t!(DANGER)))
+                                .text_size(px(13.))
+                                .child(err),
+                        ),
                 )
             })
             .when_some(self.last_success.clone(), |el, msg| {
@@ -748,10 +874,15 @@ impl MarinaWindow {
                         .px(px(16.))
                         .py(px(12.))
                         .rounded(px(8.))
-                        .bg(rgb(SUCCESS_BG))
+                        .bg(rgb(t!(SUCCESS_BG)))
                         .border_1()
-                        .border_color(rgb(SUCCESS_BORDER))
-                        .child(div().text_color(rgb(SUCCESS)).text_size(px(13.)).child(msg)),
+                        .border_color(rgb(t!(SUCCESS_BORDER)))
+                        .child(
+                            div()
+                                .text_color(rgb(t!(SUCCESS)))
+                                .text_size(px(13.))
+                                .child(msg),
+                        ),
                 )
             })
             .when_some(self.packs.importing.clone(), |el, name| {
@@ -789,11 +920,11 @@ impl MarinaWindow {
         busy: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        if let Some((_, progress, _)) = self
+        if let Some((_, (progress, _))) = self
             .packs
             .downloading
             .as_ref()
-            .filter(|(id, _, _)| id == &entry.id)
+            .filter(|(id, _)| id == &entry.id)
         {
             let (done, total) = progress.lock().map(|p| *p).unwrap_or((0, 0));
             return div()
@@ -844,8 +975,8 @@ impl MarinaWindow {
                 .gap(px(3.))
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(PRIMARY))
-                .hover(|s| s.text_color(rgb(PRIMARY_HOVER)))
+                .text_color(rgb(t!(PRIMARY)))
+                .hover(|s| s.text_color(rgb(t!(PRIMARY_HOVER))))
                 .child("详情")
                 .child("›"),
             true,
@@ -912,7 +1043,7 @@ impl MarinaWindow {
                                 .min_w(px(0.))
                                 .truncate()
                                 .text_size(px(12.))
-                                .text_color(rgb(TEXT_2))
+                                .text_color(rgb(t!(TEXT_2)))
                                 .child(if entry.description.is_empty() {
                                     "作者没有写介绍".to_owned()
                                 } else {
@@ -1020,9 +1151,9 @@ impl MarinaWindow {
                     .p(px(16.))
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(BORDER_SUBTLE))
-                    .bg(rgb(BG_CARD))
-                    .hover(|s| s.border_color(rgb(BORDER)).bg(rgb(BG_ROW_HOVER)))
+                    .border_color(rgb(t!(BORDER_SUBTLE)))
+                    .bg(rgb(t!(BG_CARD)))
+                    .hover(|s| s.border_color(rgb(t!(BORDER))).bg(rgb(t!(BG_ROW_HOVER))))
                     .child(
                         div()
                             .flex()
@@ -1068,7 +1199,7 @@ impl MarinaWindow {
                             .max_h(px(36.))
                             .overflow_hidden()
                             .text_size(px(12.5))
-                            .text_color(rgb(TEXT_2))
+                            .text_color(rgb(t!(TEXT_2)))
                             .line_height(px(18.))
                             .line_clamp(2)
                             .child(if entry.description.is_empty() {

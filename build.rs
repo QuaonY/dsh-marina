@@ -7,12 +7,24 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=assets/logo.png");
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let logo_path = manifest_dir.join("assets/logo.png");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    // macOS: produce the .icns the app bundle / DMG need. Pure-Rust encoding,
+    // so it also works when cross-building from another host.
+    if target_os == "macos" {
+        let icns_path = manifest_dir.join("assets/marina.icns");
+        if let Err(e) = generate_icns(&logo_path, &icns_path) {
+            println!("cargo:warning=Failed to generate ICNS: {e}");
+        }
         return;
     }
 
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let logo_path = manifest_dir.join("assets/logo.png");
+    if target_os != "windows" {
+        return;
+    }
+
     let ico_path = manifest_dir.join("assets/marina.ico");
 
     // Generate ICO file from PNG using the image crate
@@ -21,10 +33,17 @@ fn main() {
         return;
     }
 
-    // Now compile the RC file
+    // Compile the icon resource. The .rc is generated at build time into
+    // OUT_DIR so no marina.rc file needs to live in the repository.
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let res = out_dir.join("marina.res");
-    let marina_rc = manifest_dir.join("marina.rc");
+    let rc_path = out_dir.join("marina.rc");
+    // Relative icon path resolved against the manifest dir (rc.exe rejects
+    // canonicalized \\?\ paths), matching the original committed marina.rc.
+    if let Err(e) = std::fs::write(&rc_path, "1 ICON \"assets\\marina.ico\"\n") {
+        println!("cargo:warning=Failed to write marina.rc: {e}; the exe will have no icon");
+        return;
+    }
 
     let Some(rc) = find_rc() else {
         println!("cargo:warning=rc.exe not found; the exe will have no icon");
@@ -36,7 +55,7 @@ fn main() {
         .arg("/nologo")
         .arg("/fo")
         .arg(&res)
-        .arg(&marina_rc)
+        .arg(&rc_path)
         .status();
 
     match status {
@@ -118,6 +137,42 @@ fn generate_ico(png_path: &Path, ico_path: &Path) -> Result<(), String> {
     file.write_all(&ico_data)
         .map_err(|e| format!("Failed to write ICO file: {e}"))?;
 
+    Ok(())
+}
+
+fn generate_icns(png_path: &Path, icns_path: &Path) -> Result<(), String> {
+    use image::imageops::FilterType;
+
+    let img = image::open(png_path)
+        .map_err(|e| format!("Failed to load logo.png: {e}"))?
+        .to_rgba8();
+    let mut family = icns::IconFamily::new();
+    // All-RGBA32 icon types (1x and 2x) so the pixel format matches the data.
+    let entries = [
+        (icns::IconType::RGBA32_16x16, 16u32),
+        (icns::IconType::RGBA32_16x16_2x, 32),
+        (icns::IconType::RGBA32_32x32, 32),
+        (icns::IconType::RGBA32_32x32_2x, 64),
+        (icns::IconType::RGBA32_128x128, 128),
+        (icns::IconType::RGBA32_128x128_2x, 256),
+        (icns::IconType::RGBA32_256x256, 256),
+        (icns::IconType::RGBA32_256x256_2x, 512),
+        (icns::IconType::RGBA32_512x512, 512),
+        (icns::IconType::RGBA32_512x512_2x, 1024),
+    ];
+    for (icon_type, pixels) in entries {
+        let resized = image::imageops::resize(&img, pixels, pixels, FilterType::Lanczos3);
+        let icon =
+            icns::Image::from_data(icns::PixelFormat::RGBA, pixels, pixels, resized.into_raw())
+                .map_err(|e| format!("Failed to build {pixels}px icon: {e}"))?;
+        family
+            .add_icon_with_type(&icon, icon_type)
+            .map_err(|e| format!("Failed to add {pixels}px icon: {e}"))?;
+    }
+    let file = File::create(icns_path).map_err(|e| format!("Failed to create ICNS file: {e}"))?;
+    family
+        .write(file)
+        .map_err(|e| format!("Failed to write ICNS: {e}"))?;
     Ok(())
 }
 

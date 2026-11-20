@@ -5,14 +5,14 @@
 <h1 align="center">DSH Marina</h1>
 
 <p align="center">
-  A Windows desktop launcher for running isolated
+  A Windows and macOS desktop launcher for running isolated
   <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness (DSH)</a>
   workspaces side by side.
 </p>
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11%20%C2%B7%20macOS%2013%2B%20(arm64)-0078D4">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange">
 </p>
 
@@ -35,26 +35,46 @@ launching and stopping, installing runtimes, taking snapshots, recovering from c
 sharing a ready-to-use configuration with someone else.
 
 Marina is a separate launcher, not a DSH fork: it starts the official DSH build with isolated paths.
-It is Windows-only (Windows 10 21H2 or later, DirectX 11) and builds into one self-contained
-executable — no installer and no Visual C++ Redistributable required.
+
+## Platform support
+
+| Platform | Architecture | Minimum | Installer |
+| --- | --- | --- | --- |
+| Windows | x64 | Windows 10 21H2 (DirectX 11) | NSIS installer |
+| macOS | Apple Silicon (arm64) | macOS 13 Ventura | `.dmg` |
 
 <p align="center">
-  <img src="assets/screenshots/home.png" width="100%" alt="DSH Marina home screen: two isolated instances, one running, with live memory usage">
+  <img src="assets/screenshots/home.png" width="100%" alt="DSH Marina home: isolated instances with live status, per-instance memory sparkline, and total instance memory vs physical RAM">
 </p>
 
 <p align="center"><sub>One window for every instance, version, plugin, and snapshot.</sub></p>
 
 ## Getting started
 
-1. Download the installer `dsh-marina-setup-v<version>-windows-x64.exe` and run it, or use the
-   portable `dsh-marina-v<version>-windows-x64.exe` from any folder.
+### Windows
+
+1. Download the installer `dsh-marina-setup-v<version>-windows-x64.exe` and run it.
 2. Create an instance and pick a DSH runtime version, or let Marina download one.
 3. Start the instance. Plugins, snapshots, packs, and the tray are all managed from this window.
 
-The installer asks for a folder, a desktop shortcut and a Start menu entry, and lands under
-"Apps and features". It defaults to `%LOCALAPPDATA%\Programs\DSH Marina`, where installing and
-updating need no administrator rights. Both editions share the same data folder, so you can switch
-between them at any time.
+The installer installs per-user (no administrator rights), creates a desktop shortcut and a Start
+menu entry, and lands under "Apps and features".
+
+### macOS
+
+1. Download `dsh-marina-v<version>-macos-aarch64.dmg`, open it, and drag **DSH Marina** into
+   Applications; or use Homebrew:
+
+   ```bash
+   brew tap QuaonY/dsh-marina
+   brew install --cask dsh-marina
+   ```
+
+2. **First launch (important):** Marina uses free ad-hoc signing (no Apple Developer account), so
+   macOS blocks the un-notarized app. If the first open says the developer cannot be verified, go
+   to **System Settings → Privacy & Security**, click **"Open Anyway"** near the bottom, and enter
+   your password. After that it launches normally.
+3. Create an instance and start it.
 
 ## Features
 
@@ -65,18 +85,26 @@ between them at any time.
   default. The option to copy personal data is only available while the source instance is
   stopped.
 - Delete in three safe ways: export first, keep the data in `trash` for 30 days, or move it to the
-  Windows Recycle Bin.
+  system trash (Windows Recycle Bin / macOS Trash).
 - A dashboard shows every instance, its runtime, and whether it is running.
+
+<p align="center"><img src="assets/screenshots/new-instance.png" width="100%" alt="New-instance dialog: name, initial content (blank / clone / import pack), and local or online DSH runtime versions"></p>
+
+<p align="center"><img src="assets/screenshots/instance-settings.png" width="100%" alt="Per-instance settings: rename, runtime binding, data directories, shared or isolated skills, stability threshold, and automatic rollback"></p>
 
 ### Process lifecycle
 
-- Each instance runs in its own Windows Job Object.
-- Stop sends `WM_CLOSE`, waits five seconds, then terminates the process tree.
+- On Windows each instance runs in its own Job Object; on macOS it is managed as a separate
+  process group.
+- Stop sends a gentle close signal first (Windows `WM_CLOSE` / macOS terminate signal), waits 30
+  seconds, then force-kills the process tree.
 - Instances that keep running after Marina restarts are adopted on the next launch.
 - Readiness is read from the `dsh web: http://127.0.0.1:<port>/` line and confirmed by probing the
   port.
 - DSH stdout and stderr go to `marina/stdout-*.log`; tokens are redacted and the file is capped at
   4 MB.
+
+<p align="center"><img src="assets/screenshots/instance-detail.png" width="100%" alt="Instance overview: live status, plugin and snapshot counts, runtime version, memory and disk usage, and launch history"></p>
 
 ### Plugins
 
@@ -95,6 +123,8 @@ between them at any time.
 - Install a plugin into a chosen instance and see download and star counts.
 - Run state is respected: installing and changing plugins is disabled while the target is running.
 
+<p align="center"><img src="assets/screenshots/market.png" width="100%" alt="Plugin market: category filters, search, download and star counts, capability tags, and per-instance install"></p>
+
 ### Snapshots and rescue
 
 - Manual snapshots plus an automatic snapshot before each launch.
@@ -103,13 +133,16 @@ between them at any time.
   snapshot, reinstall plugin dependencies, then optionally restart.
 - Optional automatic rollback, off by default.
 
+<p align="center"><img src="assets/screenshots/snapshots.png" width="100%" alt="Snapshots and rollback: automatic pre-launch snapshots, last-good marker, and one-click restore"></p>
+
 ### Runtimes
 
 - Keep several DSH versions side by side and bind an instance to a specific version or to "latest
   stable".
 - Download from the official feed (nightly or stable), GitHub Releases, a GitHub mirror prefix, or
   a custom feed, with automatic fallback.
-- Resumable downloads, SHA-512 verification, and silent NSIS installation.
+- Resumable downloads and SHA-512 verification; Windows uses silent NSIS installation, macOS
+  unpacks the official `.zip` with `ditto` (preserving the symlinks inside the `.app`).
 - Installers dropped into `runtimes/` are installed offline.
 - Marina checks for a new version once a day and suggests cleanup when more than `max_runtimes`
   are installed.
@@ -117,6 +150,8 @@ between them at any time.
   tab, "Switch runtime…" rebinds it in place, with data, plugins, sessions and logins untouched. A
   snapshot is taken first, and "Switch back to the previous runtime" reverts the change. The same
   dialog also switches back to following "latest stable".
+
+<p align="center"><img src="assets/screenshots/runtimes.png" width="100%" alt="Runtime management: side-by-side DSH versions, original-install detection, download source fallback, and retention limit"></p>
 
 ### Marina Packs
 
@@ -128,55 +163,67 @@ between them at any time.
   automatically; a maintainer merges the pull request.
 - The share flow scans the exported files and redacts credentials and absolute paths.
 
+<p align="center"><img src="assets/screenshots/packs.png" width="100%" alt="Marina Packs: community catalog search, import from file, and share-to-community via GitHub"></p>
+
 ### Tray and desktop integration
 
-- Closing the window hides Marina to the system tray; quitting is done from the tray menu.
+- Closing the window hides Marina to the system tray; a left click/double-click on the tray icon
+  brings the main window back, right-click opens the tray menu, and quitting is done from the menu.
 - A tray menu per instance, plus a tooltip with the running count and total memory.
-- Start with Windows, single-instance handling, and an optional exit confirmation that lists
+- Start with the OS, single-instance handling, and an optional exit confirmation that lists
   running instances.
 - Full uninstall with separate options for the application and user data.
+
+<p align="center"><img src="assets/screenshots/settings.png" width="100%" alt="Global settings: dark mode, start with OS, exit confirmation, stop warning, and automatic update check"></p>
 
 ### About
 
 - Version, MIT license, repository link, and the full third-party license list.
 
+<p align="center"><img src="assets/screenshots/about.png" width="100%" alt="About and uninstall: version, MIT license, repository link, third-party license list, and data-preserving uninstall"></p>
+
 ### Updates
 
-- Marina checks GitHub Releases once per launch (and falls back to the CNB mirror when GitHub is
-  unreachable). A new version shows a red dot on the bell.
+- Marina checks the update manifest once per launch (GitHub raw first, falling back to the CNB
+  mirror when GitHub is unreachable). A new version shows a red dot on the bell.
 - The update dialog shows the current and the new version, that release's notes, and a link to the
   release page.
-- "Download and update" shows progress, verifies the SHA-256 published with the release, and then
-  offers "Restart and update" or "Later".
+- "Download and update" shows progress, then verifies the package's **SHA-256** against the manifest
+  before offering "Restart and update" or "Later". Windows downloads the NSIS
+  installer; macOS downloads the `.app.tar.gz`.
 - With instances running, restarting first asks; choosing "update on exit" installs the downloaded
-  build the next time Marina quits.
+  build the next time Marina quits. The Windows installer runs in passive mode and relaunches
+  automatically; macOS replaces the `.app` and restarts.
 - The check can be turned off under Settings → General.
 
 ## Data and privacy
 
-Everything lives under `%USERPROFILE%\.dsh-marina\` by default:
+Everything lives under `.dsh-marina` in your home folder by default (Windows
+`%USERPROFILE%\.dsh-marina\`, macOS `~/.dsh-marina/`):
 
 ```text
-%USERPROFILE%\.dsh-marina\
+.dsh-marina/
 ├─ marina.toml
-├─ instances\
-│  └─ <id>\
-│     ├─ home\          DSH_HOME
-│     ├─ electron\      Electron --user-data-dir
-│     ├─ marina\        Marina's per-instance state and stdout logs
-│     └─ snapshots\
-├─ runtimes\<version>\
-├─ download\
-├─ trash\
-├─ github_token.json    DPAPI-encrypted GitHub token
+├─ instances/
+│  └─ <id>/
+│     ├─ home/          DSH_HOME
+│     ├─ electron/      Electron --user-data-dir
+│     ├─ marina/        Marina's per-instance state and stdout logs
+│     └─ snapshots/
+├─ runtimes/<version>/
+├─ download/
+├─ updates/             self-update downloads and staged packages
+├─ trash/
+├─ github_token.json    encrypted GitHub token
 └─ marina.log
 ```
 
 - The data directory can be changed in Settings. Marina moves the files, verifies the copy, and
   only then removes the old directory.
-- Nothing is written next to the executable, so the exe can be moved or replaced freely.
-- The GitHub token is encrypted with Windows DPAPI and is only decrypted for this Windows user.
-  Logs and exported packs redact tokens, credentials, and local absolute paths.
+- Nothing is written next to the program, so it can be moved or replaced freely.
+- The GitHub token is encrypted with Windows DPAPI on Windows and stored in the system Keychain on
+  macOS, and is only decrypted for the current user. Logs and exported packs redact tokens,
+  credentials, and local absolute paths.
 - Marina has no analytics or telemetry. Network access happens only for what the feature at hand
   needs: update checks, runtime downloads, the plugin market, and community sharing.
 
@@ -184,73 +231,76 @@ Everything lives under `%USERPROFILE%\.dsh-marina\` by default:
 
 ### Prerequisites
 
-- Windows 10 21H2 or later with a DirectX 11 driver
 - Rust 1.88+ (edition 2024)
-- Visual Studio Build Tools with the Windows SDK, for `rc.exe` (the window icon)
+- Windows: Windows 10 21H2+, a DirectX 11 driver, Visual Studio Build Tools with the Windows SDK
+  (for `rc.exe`, the window icon)
+- macOS: macOS 13+, Xcode Command Line Tools (Metal shader compilation and `ditto`)
 
 ### Build
 
-```powershell
+```bash
 cargo build --release
 ```
 
-The result is `target\release\dsh-marina.exe`. Release builds have no console window.
+The result is `target\release\dsh-marina.exe` on Windows and `target/release/dsh-marina` on macOS.
+Release builds have no console window.
 
-The executable is fully self-contained: assets are compiled in, and `.cargo/config.toml`
+The Windows executable is fully self-contained: assets are compiled in, and `.cargo/config.toml`
 static-links the MSVC C runtime. It does not need `VCRUNTIME140.dll` or the Visual C++
 Redistributable. The remaining imports (`kernel32`, `user32`, `d3d11`, `dwrite`, `secur32`, and so
 on) ship with Windows.
 
-The icon is generated from `assets/logo.png` during the build. If `rc.exe` is not found, the build
-still succeeds with a warning and the app uses a generic Windows icon.
+The icon is generated from `assets/logo.png` during the build (`.ico` on Windows, `.icns` on
+macOS).
 
-Release binaries are not code-signed, so Windows SmartScreen may ask for confirmation the first
-time the exe is run.
+### Packaging a release (all-Rust, `cargo xtask`)
 
-### Packaging a release
+Release orchestration is done entirely by the Rust `xtask` — no PowerShell or hand-written NSIS
+scripts:
 
-```powershell
-pwsh -File installer\build-release.ps1
+```bash
+# Build + package on the current platform; artifacts + SHA-256 + a fragment go into dist/
+cargo xtask package
+
+# Merge the per-platform fragments + the matching CHANGELOG section into update.json
+cargo xtask manifest --tag v<version> --notes CHANGELOG.md
 ```
 
-This writes both artifacts into `dist\` along with their `.sha256` files:
-
-- `dsh-marina-v<version>-windows-x64.exe` — the portable build
-- `dsh-marina-setup-v<version>-windows-x64.exe` — the NSIS installer
-
-Building the installer needs [NSIS](https://nsis.sourceforge.io/) (`winget install NSIS.NSIS`);
-`installer\dsh-marina.nsi` is the script and takes the version as `/DVERSION=...`.
-
-After publishing, refresh the mirror manifest the updater falls back to:
-
-```powershell
-pwsh -File installer\write-update-json.ps1 -Tag v<version> -NotesFile notes.md
-```
-
-Commit and push `update.json`: GitHub is tried first, and this file is what a machine behind a
-blocked GitHub connection reads instead.
+- Windows produces the NSIS installer (update package) + its `.sha256` file;
+  macOS produces the `.app.tar.gz` (update package) + `.dmg` (fresh install).
+- `update.json` stays compatible with the old manifest: it keeps `tag_name/html_url/body/assets` for
+  v0.1.2 clients and adds `version/notes/pub_date/platforms` for the new updater.
+- Release is fully automatic on push: `.github/workflows/release.yml` builds both platforms, publishes
+  the GitHub Release, commits `update.json` back to main and (with `CNB_GIT_TOKEN`) syncs CNB.
+  Bump `Cargo.toml` version + append a `## <version>` section to `CHANGELOG.md` (bilingual, newest
+  first), then push — nothing else is manual. The pipeline extracts that section as the Release body.
+- `.github/workflows/ci.yml` runs fmt / clippy / test on pull requests. Neither workflow needs secrets
+  for signing; `CNB_GIT_TOKEN` is optional and only used for the CNB mirror.
 
 ## Development
 
-```powershell
+```bash
 cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run
 ```
 
-`cargo build` keeps a console window for logs; `cargo build --release` hides it.
+`cargo build` keeps a console window for logs; `cargo build --release` hides it. CI runs format,
+clippy, and tests on both Windows and macOS (arm64) runners.
 
 ### Manual testing
 
-Automated tests cover the core logic. The following still need a real Windows desktop:
+Automated tests cover the core logic. The following still need a real desktop:
 
-- Downloads from the different runtime sources
-- NSIS silent installation
+- Downloads from the different runtime sources (Windows silent NSIS / macOS `ditto` unpack)
 - `dsh plugin` CLI integration
-- Tray behavior and GUI interactions
-- Process lifecycle details (Job Objects and window messages)
+- Tray behavior and GUI interactions (including left-click to restore the window)
+- Process lifecycle details (Windows Job Objects / macOS process groups)
+- Self-update: Windows passive NSIS install + relaunch, macOS `.app` replacement + restart, and the
+  "update on exit" path
+- macOS Gatekeeper first-launch allowance and re-allowance after an update
 - The GitHub sharing flow (Device Flow, Release upload, pull request)
-- Self-update: the executable swap, and the "update on exit" path
 
 ## Tech stack
 
@@ -258,20 +308,26 @@ Automated tests cover the core logic. The following still need a real Windows de
 | --- | --- |
 | UI | [gpui-kit](https://github.com/longbridge/gpui-kit) |
 | System tray | [gpui-tray](https://github.com/domenkozar/gpui-tray) |
-| Windows integration | `windows` crate (Job Objects, registry, shell, process APIs) |
-| Networking | `reqwest` with native TLS and the Windows system proxy |
+| OS integration | Windows `windows` crate (Job Objects, registry, shell); macOS `objc2` / `libc` / `security-framework` |
+| Networking | `reqwest` with native TLS and the system proxy |
 | Data formats | serde, TOML, YAML, JSON, and ZIP |
-| Packaging | NSIS |
+| Packaging | [cargo-packager](https://github.com/crabnebula-dev/cargo-packager) (NSIS / `.app` / `.dmg`) |
+| Self-update | [cargo-packager-updater](https://github.com/crabnebula-dev/cargo-packager) (SHA-256 verification) |
+| Release orchestration | `xtask` (all-Rust) |
 
 ## Project layout
 
 ```text
-src/            application modules (instances, process, plugins, packs, …)
+src/            application modules (instances, process, plugins, packs, platform abstraction, …)
+src/platform/   Windows / macOS platform abstraction (window, single instance, disk space)
+src/process/    process backends (Job Object / process group)
 src/ui/         GPUI views, dialogs, and tab pages
 src/bin/        fake-desktop test double used by the integration tests
 tests/          process lifecycle integration tests
+xtask/          all-Rust release orchestration (package, SHA-256, manifest)
+packaging/      distribution material such as the Homebrew Cask template
 assets/         logo, icons, screenshots, and the third-party license list
-installer/      NSIS script and the release packaging scripts
+CHANGELOG.md    cumulative bilingual changelog (one section per release)
 ```
 
 ## Contributing

@@ -1,9 +1,8 @@
-//! Windows process lifecycle management for a single DSH instance.
-//!
-//! The process is created suspended and assigned to a Job Object
-//! before its first instruction runs. This closes the race where a child could
-//! escape the job by spawning before assignment.
+//! Windows backend: the process is created suspended and assigned to a Job
+//! Object before its first instruction runs. This closes the race where a
+//! child could escape the job by spawning before assignment.
 
+use super::{AdoptableInstance, OutputCapture, ProcessError, ProcessStats, StopOutcome};
 use crate::launch::LaunchSpec;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString, c_void};
@@ -11,7 +10,6 @@ use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS,
     HWND, LPARAM, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
@@ -59,28 +57,10 @@ fn current_process_in_job() -> bool {
 const INFINITE: u32 = u32::MAX;
 const TERMINATED_EXIT_CODE: u32 = 1;
 
-#[derive(Debug, Error)]
-pub enum ProcessError {
-    #[error("启动进程的参数不合法：{0}")]
-    InvalidLaunchInput(String),
-    #[error("Windows 进程操作失败：{0}")]
-    Windows(#[from] windows::core::Error),
-    #[error("等待进程结束失败")]
-    WaitFailed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopOutcome {
-    ExitedGracefully,
-    Forced,
-    AlreadyExited,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ProcessStats {
-    pub memory_bytes: u64,
-    pub process_count: u32,
-    pub runtime_seconds: u64,
+impl From<windows::core::Error> for ProcessError {
+    fn from(error: windows::core::Error) -> Self {
+        ProcessError::Platform(format!("Windows 进程操作失败：{error}"))
+    }
 }
 
 /// A DSH process that was already running before Marina started.  Windows does
@@ -88,14 +68,14 @@ pub struct ProcessStats {
 /// process-tree scanning for statistics and termination instead.
 pub struct AdoptedProcess {
     process: HANDLE,
-    process_id: u32,
-    started_at: Instant,
+    pub(crate) process_id: u32,
+    pub(crate) started_at: Instant,
 }
 
 unsafe impl Send for AdoptedProcess {}
 
 impl AdoptedProcess {
-    fn open(process_id: u32) -> Result<Self, ProcessError> {
+    pub(crate) fn open(process_id: u32) -> Result<Self, ProcessError> {
         let process = unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
@@ -110,7 +90,7 @@ impl AdoptedProcess {
         })
     }
 
-    fn is_running(&self) -> Result<bool, ProcessError> {
+    pub(crate) fn is_running(&self) -> Result<bool, ProcessError> {
         match unsafe { WaitForSingleObject(self.process, 0) }.0 {
             value if value == WAIT_TIMEOUT.0 => Ok(true),
             value if value == WAIT_OBJECT_0.0 => Ok(false),
@@ -118,7 +98,7 @@ impl AdoptedProcess {
         }
     }
 
-    fn exit_code(&self) -> Result<Option<u32>, ProcessError> {
+    pub(crate) fn exit_code(&self) -> Result<Option<u32>, ProcessError> {
         if self.is_running()? {
             return Ok(None);
         }
@@ -129,7 +109,7 @@ impl AdoptedProcess {
         Ok(Some(exit_code))
     }
 
-    fn stats(&self) -> Result<ProcessStats, ProcessError> {
+    pub(crate) fn stats(&self) -> Result<ProcessStats, ProcessError> {
         let tree = process_tree(self.process_id)?;
         let memory_bytes = tree
             .iter()
@@ -144,7 +124,7 @@ impl AdoptedProcess {
         })
     }
 
-    fn stop(self, grace_period: Duration) -> Result<StopOutcome, ProcessError> {
+    pub(crate) fn stop(self, grace_period: Duration) -> Result<StopOutcome, ProcessError> {
         if !self.is_running()? {
             return Ok(StopOutcome::AlreadyExited);
         }
@@ -170,12 +150,6 @@ impl Drop for AdoptedProcess {
             let _ = CloseHandle(self.process);
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdoptableInstance {
-    pub instance_id: String,
-    pub process_id: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -625,15 +599,6 @@ impl OutputPipe {
     }
 }
 
-/// Destination for captured child output.
-#[derive(Debug, Clone)]
-pub struct OutputCapture {
-    /// Redacted output is appended here (one file per launch).
-    pub log_file: std::path::PathBuf,
-    /// Receives the backend port from the `dsh web:` line.
-    pub endpoint: crate::health::WebEndpoint,
-}
-
 /// Owns a pipe read handle so it can move to the drain thread.
 struct PipeReader(HANDLE);
 
@@ -662,46 +627,7 @@ impl Drop for PipeReader {
 
 impl OutputCapture {
     fn drain(self, read: HANDLE) {
-        let reader = PipeReader(read);
-        let spawned = std::thread::Builder::new()
-            .name("dsh-output".to_owned())
-            .spawn(move || self.drain_lines(reader));
-        // If the thread cannot start, the closure (and the handle) is dropped.
-        drop(spawned);
-    }
-
-    fn drain_lines(self, reader: PipeReader) {
-        use std::io::{BufRead, Write};
-        const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
-        let mut log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_file)
-            .ok();
-        let mut written = 0u64;
-        let mut lines = std::io::BufReader::new(reader);
-        let mut raw = Vec::new();
-        loop {
-            raw.clear();
-            match lines.read_until(b'\n', &mut raw) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            let line = String::from_utf8_lossy(&raw);
-            let line = line.trim_end();
-            if self.endpoint.port().is_none()
-                && let Some(port) = crate::health::parse_web_port(line)
-            {
-                self.endpoint.set(port);
-            }
-            if let Some(file) = log.as_mut()
-                && written < MAX_LOG_BYTES
-            {
-                let redacted = crate::launch::redact_tokens(line);
-                written += redacted.len() as u64 + 1;
-                let _ = writeln!(file, "{redacted}");
-            }
-        }
+        self.drain_lines(PipeReader(read));
     }
 }
 
@@ -711,7 +637,7 @@ pub struct ManagedProcess {
     process: HANDLE,
     job: HANDLE,
     process_id: u32,
-    started_at: Instant,
+    pub(crate) started_at: Instant,
 }
 
 // Win32 process and Job handles are process-wide kernel handles, not thread-affine.
@@ -927,7 +853,7 @@ impl ManagedProcess {
     /// Request a normal window close first, then terminate the whole job after the grace period.
     pub fn stop(self, grace_period: Duration) -> Result<StopOutcome, ProcessError> {
         if !self.is_running()? {
-            self.terminate_job_and_wait()?;
+            self.reap()?;
             return Ok(StopOutcome::AlreadyExited);
         }
 
@@ -937,18 +863,20 @@ impl ManagedProcess {
         let wait_ms = grace_period.as_millis().min((u32::MAX - 1) as u128) as u32;
         match unsafe { WaitForSingleObject(self.process, wait_ms) }.0 {
             value if value == WAIT_OBJECT_0.0 => {
-                self.terminate_job_and_wait()?;
+                self.reap()?;
                 Ok(StopOutcome::ExitedGracefully)
             }
             value if value == WAIT_TIMEOUT.0 => {
-                self.terminate_job_and_wait()?;
+                self.reap()?;
                 Ok(StopOutcome::Forced)
             }
             _ => Err(ProcessError::WaitFailed),
         }
     }
 
-    fn terminate_job_and_wait(&self) -> Result<(), ProcessError> {
+    /// Terminate the job (cleaning up any remaining tree members) and wait for
+    /// every process in it to be gone.  Called after the root has exited.
+    pub(crate) fn reap(&self) -> Result<(), ProcessError> {
         unsafe {
             TerminateJobObject(self.job, TERMINATED_EXIT_CODE)?;
         }
@@ -979,228 +907,6 @@ impl Drop for ManagedProcess {
     }
 }
 
-/// Current in-memory state for one instance process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstanceProcessStatus {
-    Stopped,
-    Running { process_id: u32 },
-    Exited { process_id: u32, exit_code: u32 },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessExit {
-    pub instance_id: String,
-    pub process_id: u32,
-    pub exit_code: u32,
-    pub runtime_seconds: u64,
-}
-
-#[derive(Debug, Error)]
-pub enum InstanceProcessError {
-    #[error("实例已经在运行：{0}")]
-    AlreadyRunning(String),
-    #[error(transparent)]
-    Process(#[from] ProcessError),
-}
-
-/// Keeps process and Job Object handles alive for each instance started by Marina.
-#[derive(Default)]
-pub struct InstanceProcessManager {
-    processes: HashMap<String, ManagedProcess>,
-    adopted: HashMap<String, AdoptedProcess>,
-}
-
-impl InstanceProcessManager {
-    /// Start an instance and retain its handles until it exits or is stopped.
-    pub fn start(
-        &mut self,
-        instance_id: impl Into<String>,
-        spec: &LaunchSpec,
-    ) -> Result<u32, InstanceProcessError> {
-        self.start_captured(instance_id, spec, None)
-    }
-
-    /// Start an instance, optionally capturing stdout/stderr (see
-    /// [`ManagedProcess::spawn_captured`]).
-    pub fn start_captured(
-        &mut self,
-        instance_id: impl Into<String>,
-        spec: &LaunchSpec,
-        capture: Option<OutputCapture>,
-    ) -> Result<u32, InstanceProcessError> {
-        let instance_id = instance_id.into();
-        if let Some(process) = self.processes.get(&instance_id) {
-            if process.is_running()? {
-                return Err(InstanceProcessError::AlreadyRunning(instance_id));
-            }
-            process.terminate_job_and_wait()?;
-        }
-        self.processes.remove(&instance_id);
-
-        let process = ManagedProcess::spawn_captured(spec, capture)?;
-        let process_id = process.process_id();
-        self.processes.insert(instance_id, process);
-        Ok(process_id)
-    }
-
-    /// Take ownership of a process that was already running before Marina.
-    pub fn adopt(
-        &mut self,
-        instance_id: impl Into<String>,
-        process_id: u32,
-    ) -> Result<(), ProcessError> {
-        let instance_id = instance_id.into();
-        if let Some(existing) = self.adopted.get(&instance_id)
-            && existing.process_id == process_id
-            && existing.is_running()?
-        {
-            return Ok(());
-        }
-        self.adopted.remove(&instance_id);
-        self.adopted
-            .insert(instance_id, AdoptedProcess::open(process_id)?);
-        Ok(())
-    }
-
-    pub fn status(&self, instance_id: &str) -> Result<InstanceProcessStatus, InstanceProcessError> {
-        if let Some(process) = self.adopted.get(instance_id) {
-            return if process.is_running()? {
-                Ok(InstanceProcessStatus::Running {
-                    process_id: process.process_id,
-                })
-            } else {
-                let exit_code = process.exit_code()?.ok_or(ProcessError::WaitFailed)?;
-                Ok(InstanceProcessStatus::Exited {
-                    process_id: process.process_id,
-                    exit_code,
-                })
-            };
-        }
-        let Some(process) = self.processes.get(instance_id) else {
-            return Ok(InstanceProcessStatus::Stopped);
-        };
-        if process.is_running()? {
-            Ok(InstanceProcessStatus::Running {
-                process_id: process.process_id(),
-            })
-        } else {
-            let exit_code = process.exit_code()?.ok_or(ProcessError::WaitFailed)?;
-            Ok(InstanceProcessStatus::Exited {
-                process_id: process.process_id(),
-                exit_code,
-            })
-        }
-    }
-
-    pub fn stats(&self, instance_id: &str) -> Result<Option<ProcessStats>, InstanceProcessError> {
-        if let Some(process) = self.adopted.get(instance_id) {
-            if !process.is_running()? {
-                return Ok(None);
-            }
-            return Ok(Some(process.stats()?));
-        }
-        let Some(process) = self.processes.get(instance_id) else {
-            return Ok(None);
-        };
-        if !process.is_running()? {
-            return Ok(None);
-        }
-        Ok(Some(process.stats()?))
-    }
-
-    pub fn is_adopted(&self, instance_id: &str) -> bool {
-        self.adopted.contains_key(instance_id)
-    }
-
-    pub fn running_instances(&self) -> Result<Vec<String>, InstanceProcessError> {
-        let mut running = Vec::new();
-        for (instance_id, process) in &self.processes {
-            if process.is_running()? {
-                running.push(instance_id.clone());
-            }
-        }
-        for (instance_id, process) in &self.adopted {
-            if process.is_running()? && !running.contains(instance_id) {
-                running.push(instance_id.clone());
-            }
-        }
-        Ok(running)
-    }
-    /// Remove naturally exited processes and return their exit information.
-    pub fn reap_exited(&mut self) -> Result<Vec<ProcessExit>, InstanceProcessError> {
-        let mut exited = Vec::new();
-        let mut ids = Vec::new();
-        for (instance_id, process) in &self.processes {
-            if !process.is_running()? {
-                let exit_code = process.exit_code()?.ok_or(ProcessError::WaitFailed)?;
-                process.terminate_job_and_wait()?;
-                exited.push(ProcessExit {
-                    instance_id: instance_id.clone(),
-                    process_id: process.process_id(),
-                    exit_code,
-                    runtime_seconds: process.started_at.elapsed().as_secs(),
-                });
-                ids.push(instance_id.clone());
-            }
-        }
-        for instance_id in ids {
-            self.processes.remove(&instance_id);
-        }
-
-        let mut adopted_ids = Vec::new();
-        for (instance_id, process) in &self.adopted {
-            if !process.is_running()? {
-                let exit_code = process.exit_code()?.ok_or(ProcessError::WaitFailed)?;
-                exited.push(ProcessExit {
-                    instance_id: instance_id.clone(),
-                    process_id: process.process_id,
-                    exit_code,
-                    runtime_seconds: process.started_at.elapsed().as_secs(),
-                });
-                adopted_ids.push(instance_id.clone());
-            }
-        }
-        for instance_id in adopted_ids {
-            self.adopted.remove(&instance_id);
-        }
-        Ok(exited)
-    }
-
-    pub fn stop(
-        &mut self,
-        instance_id: &str,
-        grace_period: Duration,
-    ) -> Result<StopOutcome, InstanceProcessError> {
-        if let Some(process) = self.adopted.remove(instance_id) {
-            return Ok(process.stop(grace_period)?);
-        }
-        let Some(process) = self.processes.remove(instance_id) else {
-            return Ok(StopOutcome::AlreadyExited);
-        };
-        Ok(process.stop(grace_period)?)
-    }
-
-    /// Find running DSH processes that belong to known instances and adopt them.
-    pub fn adopt_existing(
-        &mut self,
-        repository: &crate::instances::InstanceRepository,
-    ) -> Result<Vec<String>, InstanceProcessError> {
-        let candidates = scan_instance_processes(repository)?;
-        let mut adopted = Vec::new();
-        for candidate in candidates {
-            if self.processes.contains_key(&candidate.instance_id)
-                || self.adopted.contains_key(&candidate.instance_id)
-            {
-                continue;
-            }
-            match self.adopt(candidate.instance_id.clone(), candidate.process_id) {
-                Ok(()) => adopted.push(candidate.instance_id),
-                Err(_) => continue,
-            }
-        }
-        Ok(adopted)
-    }
-}
 unsafe extern "system" fn close_process_window(window: HWND, process_id: LPARAM) -> BOOL {
     let mut owner_process_id = 0;
     unsafe {
@@ -1317,6 +1023,9 @@ fn quote_windows_argument(argument: &OsStr) -> Result<Vec<u16>, ProcessError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::{
+        InstanceProcessError, InstanceProcessManager, InstanceProcessStatus, ProcessExit,
+    };
 
     fn as_string(wide: Vec<u16>) -> String {
         String::from_utf16(&wide).unwrap()

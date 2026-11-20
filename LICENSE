@@ -19,3 +19,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Third-party components
+----------------------
+
+DSH Marina bundles or links third-party open-source components (GPUI, gpui-kit,
+gpui-tray, and other Rust crates). Those components remain under their own
+licenses (Apache-2.0, MIT, and others); the MIT terms above apply only to
+DSH Marina's own source code. The full list of third-party copyright and
+license notices is in assets/THIRD-PARTY-LICENSES.txt.

@@ -64,10 +64,16 @@ pub struct SensitiveFinding {
     pub excerpt: String,
 }
 
-/// Windows absolute paths (`C:\...`) that should be redacted before sharing.
+/// Windows absolute paths that should be redacted before sharing: drive paths
+/// with either separator and any case (`C:\…`, `c:/…` — JSON configs often use
+/// `/`), plus UNC shares (`\\server\share\…`). The `\b` keeps URLs such as
+/// `https://…` from matching the drive-letter branch.
 fn abs_path_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"[A-Z]:\\[^\s"'<>|]{2,}"#).expect("valid path pattern"))
+    RE.get_or_init(|| {
+        Regex::new(r#"(?i)(?:\b[a-z]:[\\/][^\s"'<>|]{2,}|\\\\[^\s"'<>|\\/]+[\\/][^\s"'<>|]{2,})"#)
+            .expect("valid path pattern")
+    })
 }
 
 /// Scan text for sensitive content.
@@ -80,6 +86,10 @@ pub fn scan_text(path: &str, text: &str, home: Option<&Path>) -> Vec<SensitiveFi
     let token_pattern = token_regex();
     let bare_pattern = bare_secret_regex();
     let abs_path_pattern = abs_path_regex();
+    // Windows paths are case-insensitive: match the home directory in any case.
+    let home_re =
+        home.and_then(|h| Regex::new(&format!("(?i){}", regex::escape(&h.to_string_lossy()))).ok());
+    let home_lower = home.map(|h| h.to_string_lossy().to_ascii_lowercase());
 
     for (line_num, line) in text.lines().enumerate() {
         // Check for tokens: either a `key = value` pair or a bare known secret.
@@ -98,27 +108,25 @@ pub fn scan_text(path: &str, text: &str, home: Option<&Path>) -> Vec<SensitiveFi
         }
 
         // Check for absolute paths
-        if let Some(home_path) = home {
-            let home_str = home_path.to_string_lossy();
-            if line.contains(home_str.as_ref()) {
-                let redacted = line.replace(home_str.as_ref(), "%USERPROFILE%");
-                findings.push(SensitiveFinding {
-                    file: path.to_string(),
-                    kind: SensitiveKind::AbsolutePath,
-                    line: line_num + 1,
-                    excerpt: redacted,
-                });
-            }
+        if let Some(home_re) = &home_re
+            && home_re.is_match(line)
+        {
+            let redacted = home_re.replace_all(line, home_placeholder()).to_string();
+            findings.push(SensitiveFinding {
+                file: path.to_string(),
+                kind: SensitiveKind::AbsolutePath,
+                line: line_num + 1,
+                excerpt: redacted,
+            });
         }
 
         // Check for other absolute paths (like D:\\ or E:\\)
         if abs_path_pattern.is_match(line) {
             // Check if it's not the home path (already handled above)
-            let has_non_home_path = if let Some(home_path) = home {
-                let home_str = home_path.to_string_lossy();
+            let has_non_home_path = if let Some(home_lower) = &home_lower {
                 abs_path_pattern
                     .find_iter(line)
-                    .any(|m| !m.as_str().starts_with(home_str.as_ref()))
+                    .any(|m| !m.as_str().to_ascii_lowercase().starts_with(home_lower))
             } else {
                 true
             };
@@ -164,15 +172,25 @@ fn redact_token_values(text: &str) -> String {
 
 /// Redact sensitive content from text.
 ///
+/// The placeholder substituted for the user's home directory in redacted
+/// output: `%USERPROFILE%` on Windows, `~` elsewhere.
+fn home_placeholder() -> &'static str {
+    if cfg!(windows) { "%USERPROFILE%" } else { "~" }
+}
+
 /// - Replaces token values with `***`
-/// - Replaces home directory paths with `%USERPROFILE%`
+/// - Replaces home directory paths with the platform placeholder
 pub fn redact_text(text: &str, home: Option<&str>) -> String {
     let mut result = redact_token_values(text);
     result = bare_secret_regex().replace_all(&result, "***").to_string();
 
-    // Redact home directory paths
+    // Redact home directory paths (case-insensitive, like Windows itself)
     if let Some(home_str) = home {
-        result = result.replace(home_str, "%USERPROFILE%");
+        let placeholder = home_placeholder();
+        match Regex::new(&format!("(?i){}", regex::escape(home_str))) {
+            Ok(re) => result = re.replace_all(&result, placeholder).to_string(),
+            Err(_) => result = result.replace(home_str, placeholder),
+        }
     }
 
     result
@@ -258,6 +276,66 @@ mod tests {
         let text = "dir: C:\\Users\\example\\Documents";
         let redacted = redact_text(text, Some(home));
         assert!(!redacted.contains("C:\\Users\\example"));
-        assert!(redacted.contains("%USERPROFILE%"));
+        assert!(redacted.contains(home_placeholder()));
+    }
+
+    #[test]
+    fn scans_lowercase_forward_slash_and_json_paths() {
+        for text in [
+            "dir: c:\\users\\example\\documents",
+            "dir: C:/Users/example/Documents",
+            r#"{"dir": "C:\\Users\\example\\Documents"}"#,
+        ] {
+            let findings = scan_text("config.json", text, None);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.kind == SensitiveKind::AbsolutePath),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn scans_unc_paths() {
+        let text = r"share: \\fileserver\team\docs";
+        let findings = scan_text("config.yml", text, None);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == SensitiveKind::AbsolutePath),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn urls_are_not_absolute_paths() {
+        let text = "homepage: https://github.com/QuaonY/dsh-marina";
+        let findings = scan_text("config.yml", text, None);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.kind == SensitiveKind::AbsolutePath),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn redacts_lowercase_home() {
+        let home = "C:\\Users\\Example";
+        let text = "dir: c:\\users\\example\\Documents";
+        let redacted = redact_text(text, Some(home));
+        assert!(redacted.contains(home_placeholder()), "{redacted}");
+        assert!(
+            !redacted.to_ascii_lowercase().contains("c:\\users\\example"),
+            "{redacted}"
+        );
+        let findings = scan_text("config.yml", text, Some(&PathBuf::from(home)));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == SensitiveKind::AbsolutePath),
+            "{findings:?}"
+        );
     }
 }

@@ -97,7 +97,14 @@ fn location(address: &str) -> Result<Location, CatalogError> {
     }
     if has_ascii_prefix(address, "file:///") {
         let rest = address.get("file:///".len()..).unwrap_or_default();
-        return Ok(Location::Local(PathBuf::from(rest.replace('/', "\\"))));
+        // Windows: `file:///C:/x` -> `C:\x`.  POSIX: `file:///Users/x` ->
+        // `/Users/x` (the leading slash was consumed by the scheme).
+        let path = if cfg!(windows) {
+            rest.replace('/', "\\")
+        } else {
+            format!("/{rest}")
+        };
+        return Ok(Location::Local(PathBuf::from(path)));
     }
     let path = Path::new(address);
     if path.is_absolute() {

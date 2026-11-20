@@ -170,6 +170,7 @@ pub fn uninstall_marina(state: &AppState, mode: UninstallMode) -> Result<Option<
     if let Err(e) = dsh_marina::platform::set_auto_start(false) {
         dsh_marina::applog::warn(&format!("移除开机自启失败：{e}"));
     }
+    #[cfg(windows)]
     if let Ok(settings) = state.settings_store.load()
         && settings.handle_links
         && let Err(e) =
@@ -178,16 +179,35 @@ pub fn uninstall_marina(state: &AppState, mode: UninstallMode) -> Result<Option<
         dsh_marina::applog::warn(&format!("恢复 dsh:// 协议失败：{e}"));
     }
     let executable = dsh_marina::platform::current_executable()?;
-    // An NSIS-installed copy owns shortcuts and the "应用和功能" entry, so let
-    // its uninstaller remove the program while we only handle the data.
-    let installer_uninstaller = executable.with_file_name("uninstall.exe");
-    if installer_uninstaller.is_file() {
-        storage::spawn_installer_uninstall(&installer_uninstaller)
-            .map_err(|e| format!("无法启动卸载程序：{e}"))?;
-        return Ok(saved);
+    #[cfg(windows)]
+    {
+        // An NSIS-installed copy owns shortcuts and the "应用和功能" entry, so let
+        // its uninstaller remove the program while we only handle the data.
+        let installer_uninstaller = executable.with_file_name("uninstall.exe");
+        if installer_uninstaller.is_file() {
+            storage::spawn_installer_uninstall(&installer_uninstaller)
+                .map_err(|e| format!("无法启动卸载程序：{e}"))?;
+            return Ok(saved);
+        }
+        storage::spawn_uninstall_script(&executable, &data_root, mode != UninstallMode::MoveData)
+            .map_err(|e| format!("无法安排卸载：{e}"))?;
     }
-    storage::spawn_uninstall_script(&executable, &data_root, mode != UninstallMode::MoveData)
-        .map_err(|e| format!("无法安排卸载：{e}"))?;
+    #[cfg(not(windows))]
+    {
+        // macOS: move the .app bundle (or the bare executable) to the Trash.
+        // The data directory was already handled above; the running binary can
+        // be trashed while Marina is still alive and exits normally afterwards.
+        let target = executable
+            .ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| executable.clone());
+        let remove_data = mode != UninstallMode::MoveData;
+        trash::delete(&target).map_err(|e| format!("无法移到废纸篓：{e}"))?;
+        if remove_data {
+            let _ = trash::delete(&data_root);
+        }
+    }
     Ok(saved)
 }
 

@@ -200,7 +200,8 @@ pub enum RepositoryError {
     ParseConfig {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        // Boxed: toml::de::Error is large and would bloat every Result<(), RepositoryError>.
+        source: Box<toml::de::Error>,
     },
     #[error("写入实例配置失败：{0}")]
     SerializeConfig(#[from] toml::ser::Error),
@@ -275,7 +276,7 @@ impl InstanceRepository {
         let config: InstanceConfig =
             toml::from_str(&text).map_err(|source| RepositoryError::ParseConfig {
                 path: paths.config,
-                source,
+                source: Box::new(source),
             })?;
         config.validate()?;
         if config.id != id {

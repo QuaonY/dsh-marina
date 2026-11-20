@@ -15,7 +15,7 @@ fn dialog_shell(title: &str, title_color: u32, width: f32, body: Div, footer: Di
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgba(OVERLAY))
+        .bg(rgba(t!(OVERLAY)))
         .occlude()
         .child(
             div()
@@ -24,9 +24,9 @@ fn dialog_shell(title: &str, title_color: u32, width: f32, body: Div, footer: Di
                 .w(px(width))
                 .max_h(relative(0.92))
                 .rounded(px(18.))
-                .bg(rgb(BG_CARD))
+                .bg(rgb(t!(BG_CARD)))
                 .border_1()
-                .border_color(rgb(BORDER_SUBTLE))
+                .border_color(rgb(t!(BORDER_SUBTLE)))
                 .shadow_lg()
                 .overflow_hidden()
                 .child(
@@ -63,7 +63,7 @@ fn field_label(text: &str) -> Div {
     div()
         .mb(px(8.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(TEXT_2))
+        .text_color(rgb(t!(TEXT_2)))
         .child(text.to_owned())
 }
 
@@ -72,7 +72,7 @@ fn body() -> Div {
 }
 
 fn paragraph(text: impl Into<SharedString>) -> Div {
-    div().text_color(rgb(TEXT_2)).child(text.into())
+    div().text_color(rgb(t!(TEXT_2))).child(text.into())
 }
 
 /// Radio-style option card.
@@ -84,13 +84,14 @@ fn option_card(title: &str, desc: &str, selected: bool) -> Hoverable {
             .gap(px(13.))
             .px(px(16.))
             .py(px(14.))
-            .rounded(px(11.))
+            .rounded(px(12.))
             .border_1()
             .when(selected, |el| {
-                el.border_color(rgb(PRIMARY)).bg(rgba(PRIMARY_TINT_08))
+                el.border_color(rgb(t!(PRIMARY)))
+                    .bg(rgba(t!(PRIMARY_TINT_08)))
             })
             .when(!selected, |el| {
-                el.border_color(rgb(BORDER)).bg(rgb(BG_ELEVATED))
+                el.border_color(rgb(t!(BORDER))).bg(rgb(t!(BG_CARD)))
             })
             .child(
                 div()
@@ -102,9 +103,9 @@ fn option_card(title: &str, desc: &str, selected: bool) -> Hoverable {
                     .justify_center()
                     .rounded_full()
                     .border_2()
-                    .border_color(rgb(if selected { PRIMARY } else { BORDER }))
+                    .border_color(rgb(if selected { t!(PRIMARY) } else { t!(BORDER) }))
                     .when(selected, |el| {
-                        el.child(div().size(px(8.)).rounded_full().bg(rgb(PRIMARY)))
+                        el.child(div().size(px(8.)).rounded_full().bg(rgb(t!(PRIMARY))))
                     }),
             )
             .child(
@@ -124,13 +125,17 @@ fn option_card(title: &str, desc: &str, selected: bool) -> Hoverable {
                     }),
             ),
         move |s| {
-            if selected { s } else { s.bg(rgb(BG_CARD)) }
+            if selected {
+                s
+            } else {
+                s.bg(rgb(t!(BG_ROW_HOVER)))
+            }
         },
     )
 }
 
 fn error_text(text: String) -> Div {
-    div().text_color(rgb(DANGER)).child(text)
+    div().text_color(rgb(t!(DANGER))).child(text)
 }
 
 /// One line of release notes, with the Markdown that GitHub renders stripped
@@ -151,7 +156,7 @@ fn render_note_line(line: &str) -> Div {
         div()
             .pt(px(2.))
             .font_weight(FontWeight::BOLD)
-            .text_color(rgb(TEXT))
+            .text_color(rgb(t!(TEXT)))
             .child(text)
     } else {
         div().child(text)
@@ -203,7 +208,7 @@ impl MarinaWindow {
         };
         dialog_shell(
             &job.title,
-            TEXT,
+            t!(TEXT),
             520.,
             body()
                 .child(paragraph(status))
@@ -212,12 +217,12 @@ impl MarinaWindow {
                         .h(px(8.))
                         .w_full()
                         .rounded(px(4.))
-                        .bg(rgb(BG_ELEVATED))
+                        .bg(rgb(t!(BG_ELEVATED)))
                         .child(
                             div()
                                 .h_full()
                                 .rounded(px(4.))
-                                .bg(rgb(PRIMARY))
+                                .bg(rgb(t!(PRIMARY)))
                                 .w(relative(ratio)),
                         ),
                 )
@@ -254,7 +259,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "创建快照",
-                    TEXT,
+                    t!(TEXT),
                     520.,
                     body()
                         .child(paragraph("手动保存一份当前的插件配置，用于以后回滚。"))
@@ -280,7 +285,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "回滚到快照",
-                    TEXT,
+                    t!(TEXT),
                     520.,
                     body().child(paragraph(text)),
                     div().child(self.cancel_button(cx)).child(submit),
@@ -300,7 +305,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "删除快照",
-                    DANGER,
+                    t!(DANGER),
                     520.,
                     body().child(paragraph(text)),
                     div().child(self.cancel_button(cx)).child(submit),
@@ -315,7 +320,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "重命名实例",
-                    TEXT,
+                    t!(TEXT),
                     520.,
                     body()
                         .child(paragraph("名称只影响启动器里的显示，不会改动实例目录。"))
@@ -335,7 +340,7 @@ impl MarinaWindow {
                             .rounded(px(8.))
                             .bg(rgb(super::hex_color(&value)))
                             .border_2()
-                            .border_color(if selected { rgb(TEXT) } else { rgb(BG_CARD) }),
+                            .border_color(if selected { rgb(t!(TEXT)) } else { rgb(t!(BG_CARD)) }),
                         !selected,
                         cx.listener(move |this, _, _, cx| {
                             if let Some(Dialog::Appearance { color, .. }) = this.dialog.as_mut() {
@@ -348,7 +353,7 @@ impl MarinaWindow {
                 }));
                 dialog_shell(
                     "图标、颜色与备注",
-                    TEXT,
+                    t!(TEXT),
                     540.,
                     body()
                         .child(div().child(field_label("颜色")).child(swatches))
@@ -377,7 +382,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "复制为新实例",
-                    TEXT,
+                    t!(TEXT),
                     520.,
                     body()
                         .child(paragraph(format!("复制「{source}」的插件组合和配置到一个新实例。")))
@@ -418,7 +423,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "DSH 版本变化较大",
-                    TEXT,
+                    t!(TEXT),
                     560.,
                     body().child(paragraph(text)),
                     div()
@@ -457,7 +462,7 @@ impl MarinaWindow {
                 );
                 dialog_shell(
                     "卸载插件",
-                    DANGER,
+                    t!(DANGER),
                     520.,
                     body().child(paragraph(text)),
                     div().child(self.cancel_button(cx)).child(submit),
@@ -469,7 +474,7 @@ impl MarinaWindow {
             Dialog::MarketInstall { index, target } => self.render_market_install_dialog(*index, target.clone(), cx)?,
             Dialog::Exit { running } => dialog_shell(
                 "退出 DSH Marina",
-                TEXT,
+                t!(TEXT),
                 560.,
                 body().child(paragraph(format!(
                     "还有 {running} 个实例正在运行，退出启动器会结束它们。「先停止实例再退出」会依次请求正常退出；「强制退出」立即结束所有进程，可能丢失未保存的会话数据。"
@@ -533,7 +538,7 @@ impl MarinaWindow {
                 });
                 dialog_shell(
                     "卸载原版 DSH",
-                    DANGER,
+                    t!(DANGER),
                     580.,
                     body()
                         .child(error_text(
@@ -568,7 +573,7 @@ impl MarinaWindow {
                 });
                 dialog_shell(
                     &format!("解绑后删除 DSH {version}"),
-                    DANGER,
+                    t!(DANGER),
                     560.,
                     body()
                         .child(paragraph(format!(
@@ -592,7 +597,7 @@ impl MarinaWindow {
                 let runtime_id = runtime_id.clone();
                 dialog_shell(
                     "删除 DSH 版本",
-                    DANGER,
+                    t!(DANGER),
                     520.,
                     body().child(paragraph(format!(
                         "即将删除 DSH {version}。没有实例在使用它，文件会移到系统回收站。"
@@ -613,7 +618,7 @@ impl MarinaWindow {
                 let size = storage::format_bytes(storage::directory_size(&current));
                 dialog_shell(
                     "移动数据目录",
-                    TEXT,
+                    t!(TEXT),
                     580.,
                     body()
                         .child(paragraph(format!(
@@ -668,7 +673,7 @@ impl MarinaWindow {
                         div()
                             .p(px(10.))
                             .rounded(px(8.))
-                            .bg(rgb(BG_ELEVATED))
+                            .bg(rgb(t!(BG_ELEVATED)))
                             .font_family(MONO)
                             .text_size(px(12.))
                             .child(url.clone()),
@@ -676,7 +681,7 @@ impl MarinaWindow {
                 };
                 dialog_shell(
                     "用哪个实例打开链接",
-                    TEXT,
+                    t!(TEXT),
                     560.,
                     body()
                         .child(link)
@@ -696,7 +701,7 @@ impl MarinaWindow {
                 let busy = *busy;
                 dialog_shell(
                     &format!("二分排查「{name}」· 第 {} 轮", bisect.round),
-                    TEXT,
+                    t!(TEXT),
                     580.,
                     body()
                         .child(paragraph(format!(
@@ -734,7 +739,7 @@ impl MarinaWindow {
                 let names: Vec<String> = versions.iter().map(|(_, v)| format!("DSH {v}")).collect();
                 dialog_shell(
                     "清理旧版本",
-                    TEXT,
+                    t!(TEXT),
                     520.,
                     body().child(paragraph(format!(
                         "已托管的 DSH 版本超过了设置的上限（{max} 个）。下面这些旧版本没有实例在用，可以移到回收站：{}。",
@@ -778,7 +783,7 @@ impl MarinaWindow {
                 let more = findings.len().saturating_sub(12);
                 dialog_shell(
                     "导出前发现敏感内容",
-                    TEXT,
+                    t!(TEXT),
                     600.,
                     body()
                         .child(paragraph(format!(
@@ -854,7 +859,7 @@ impl MarinaWindow {
                 ));
                 dialog_shell(
                     &format!("{action}「{name}」"),
-                    TEXT,
+                    t!(TEXT),
                     540.,
                     body()
                         .child(paragraph(format!(
@@ -933,7 +938,7 @@ impl MarinaWindow {
         );
         dialog_shell(
             "版本更新",
-            TEXT,
+            t!(TEXT),
             640.,
             body()
                 .gap(px(16.))
@@ -955,7 +960,12 @@ impl MarinaWindow {
                                         .child(current.to_owned()),
                                 ),
                         )
-                        .child(div().text_size(px(18.)).text_color(rgb(PRIMARY)).child("→"))
+                        .child(
+                            div()
+                                .text_size(px(18.))
+                                .text_color(rgb(t!(PRIMARY)))
+                                .child("→"),
+                        )
                         .child(
                             div()
                                 .flex()
@@ -971,7 +981,7 @@ impl MarinaWindow {
                                             div()
                                                 .font_family(MONO)
                                                 .font_weight(FontWeight::BOLD)
-                                                .text_color(rgb(PRIMARY))
+                                                .text_color(rgb(t!(PRIMARY)))
                                                 .child(version.to_owned()),
                                         )
                                         .child(chip("可更新", ChipTone::Warn)),
@@ -987,8 +997,8 @@ impl MarinaWindow {
                                 .max_h(px(260.))
                                 .rounded(px(10.))
                                 .border_1()
-                                .border_color(rgb(BORDER_SUBTLE))
-                                .bg(rgb(BG_ELEVATED))
+                                .border_color(rgb(t!(BORDER_SUBTLE)))
+                                .bg(rgb(t!(BG_ELEVATED)))
                                 .px(px(14.))
                                 .py(px(12.))
                                 .overflow_y_scrollbar()
@@ -998,7 +1008,7 @@ impl MarinaWindow {
                                         .flex_col()
                                         .gap(px(4.))
                                         .text_size(px(12.5))
-                                        .text_color(rgb(TEXT_2))
+                                        .text_color(rgb(t!(TEXT_2)))
                                         .children(notes.lines().map(render_note_line)),
                                 ),
                         ),
@@ -1008,8 +1018,8 @@ impl MarinaWindow {
                         .flex_shrink_0()
                         .text_size(px(12.5))
                         .font_family(MONO)
-                        .text_color(rgb(PRIMARY))
-                        .hover(|s| s.text_color(rgb(PRIMARY_HOVER)))
+                        .text_color(rgb(t!(PRIMARY)))
+                        .hover(|s| s.text_color(rgb(t!(PRIMARY_HOVER))))
                         .child("在 GitHub 上查看这个版本"),
                     true,
                     cx.listener(move |_, _, _, cx| cx.open_url(&project_url)),
@@ -1025,7 +1035,7 @@ impl MarinaWindow {
     fn render_update_ready_dialog(&self, version: &str, cx: &mut Context<Self>) -> Div {
         dialog_shell(
             "更新已准备好",
-            TEXT,
+            t!(TEXT),
             560.,
             body().child(paragraph(format!(
                 "版本 {version} 已下载并通过校验。重启 Marina 就会切换到新版本，已有的实例和数据都不会受影响。"
@@ -1055,7 +1065,7 @@ impl MarinaWindow {
         let names = running.join("、");
         dialog_shell(
             "需要先关掉实例",
-            TEXT,
+            t!(TEXT),
             580.,
             body()
                 .gap(px(12.))
@@ -1086,7 +1096,7 @@ impl MarinaWindow {
     fn render_update_on_exit(&self, version: &str, path: PathBuf, cx: &mut Context<Self>) -> Div {
         dialog_shell(
             "退出前更新",
-            TEXT,
+            t!(TEXT),
             560.,
             body().child(paragraph(format!(
                 "版本 {version} 已经下载好了。现在退出 Marina，顺便装上新版本吗？"
@@ -1173,7 +1183,7 @@ impl MarinaWindow {
             .count();
         dialog_shell(
             "卸载 DSH Marina",
-            DANGER,
+            t!(DANGER),
             600.,
             body()
                 .child(paragraph(summary))
@@ -1368,7 +1378,7 @@ impl MarinaWindow {
                     .children(stats.red_lines.iter().take(4).map(|line| {
                         div()
                             .text_size(px(12.))
-                            .text_color(rgb(DANGER))
+                            .text_color(rgb(t!(DANGER)))
                             .child(format!("⚠ {}", dsh_marina::market::red_line_label(line)))
                     }))
                     .child(
@@ -1378,7 +1388,7 @@ impl MarinaWindow {
             });
         Some(dialog_shell(
             &format!("安装 {}", plugin.short_title()),
-            TEXT,
+            t!(TEXT),
             560.,
             body()
                 .child(paragraph(format!(
@@ -1446,7 +1456,7 @@ impl MarinaWindow {
         };
         dialog_shell(
             "复制插件组合到…",
-            TEXT,
+            t!(TEXT),
             560.,
             body()
                 .child(paragraph(format!(
@@ -1514,7 +1524,7 @@ impl MarinaWindow {
                 .child(
                     div()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(TEXT_2))
+                        .text_color(rgb(t!(TEXT_2)))
                         .child(tr(title)),
                 )
                 .when_some(right, |el, right| el.child(right))
@@ -1576,7 +1586,7 @@ impl MarinaWindow {
                             .gap(px(8.))
                             .p(px(12.))
                             .rounded(px(10.))
-                            .bg(rgb(BG_ELEVATED))
+                            .bg(rgb(t!(BG_ELEVATED)))
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
@@ -1596,7 +1606,7 @@ impl MarinaWindow {
                                 div()
                                     .font_family(MONO)
                                     .text_size(px(11.))
-                                    .text_color(rgb(TEXT_3))
+                                    .text_color(rgb(t!(TEXT_3)))
                                     .truncate()
                                     .child(path.display().to_string()),
                             )
@@ -1623,8 +1633,16 @@ impl MarinaWindow {
                             .py(px(5.))
                             .rounded(px(8.))
                             .border_1()
-                            .border_color(rgb(if selected { PRIMARY } else { BORDER_SUBTLE }))
-                            .bg(rgb(if selected { PRIMARY_MUTED } else { BG_CARD }))
+                            .border_color(rgb(if selected {
+                                t!(PRIMARY)
+                            } else {
+                                t!(BORDER_SUBTLE)
+                            }))
+                            .bg(rgb(if selected {
+                                t!(PRIMARY_MUTED)
+                            } else {
+                                t!(BG_CARD)
+                            }))
                             .child(badge(
                                 &badge_text(instance),
                                 hex_color(&instance.color),
@@ -1634,7 +1652,7 @@ impl MarinaWindow {
                                 div()
                                     .text_size(px(12.5))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(if selected { PRIMARY } else { TEXT }))
+                                    .text_color(rgb(if selected { t!(PRIMARY) } else { t!(TEXT) }))
                                     .child(instance.name.clone()),
                             ),
                         true,
@@ -1661,7 +1679,7 @@ impl MarinaWindow {
                             .gap(px(12.))
                             .p(px(12.))
                             .rounded(px(10.))
-                            .bg(rgb(BG_ELEVATED))
+                            .bg(rgb(t!(BG_ELEVATED)))
                             .child(
                                 div()
                                     .flex()
@@ -1720,7 +1738,7 @@ impl MarinaWindow {
                                 .px(px(12.))
                                 .py(px(8.))
                                 .rounded(px(8.))
-                                .when(selected, |el| el.bg(rgb(PRIMARY_MUTED)))
+                                .when(selected, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
                                 .when(show_radio, |el| {
                                     el.child(
                                         div()
@@ -1732,16 +1750,16 @@ impl MarinaWindow {
                                             .rounded_full()
                                             .border_2()
                                             .border_color(rgb(if selected {
-                                                PRIMARY
+                                                t!(PRIMARY)
                                             } else {
-                                                BORDER
+                                                t!(BORDER)
                                             }))
                                             .when(selected, |el| {
                                                 el.child(
                                                     div()
                                                         .size(px(6.))
                                                         .rounded_full()
-                                                        .bg(rgb(PRIMARY)),
+                                                        .bg(rgb(t!(PRIMARY))),
                                                 )
                                             }),
                                     )
@@ -1750,7 +1768,11 @@ impl MarinaWindow {
                                     div()
                                         .font_family(MONO)
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(if selected { PRIMARY } else { TEXT }))
+                                        .text_color(rgb(if selected {
+                                            t!(PRIMARY)
+                                        } else {
+                                            t!(TEXT)
+                                        }))
                                         .child(choice.version.clone()),
                                 )
                                 .child(if prerelease {
@@ -1772,7 +1794,13 @@ impl MarinaWindow {
                                         ChipTone::Off,
                                     )
                                 }),
-                            move |s| if selected { s } else { s.bg(rgb(BG_ROW_HOVER)) },
+                            move |s| {
+                                if selected {
+                                    s
+                                } else {
+                                    s.bg(rgb(t!(BG_ROW_HOVER)))
+                                }
+                            },
                         ),
                         !dialog.busy,
                         cx.listener(move |this, _, _, cx| {
@@ -1793,7 +1821,7 @@ impl MarinaWindow {
                                     div()
                                         .text_size(px(11.5))
                                         .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(SUCCESS))
+                                        .text_color(rgb(t!(SUCCESS)))
                                         .child("✓ 本地已有运行时（无需下载）"),
                                 ),
                             )
@@ -1819,7 +1847,7 @@ impl MarinaWindow {
                                         .h(px(1.))
                                         .mx(px(12.))
                                         .my(px(8.))
-                                        .bg(rgb(BORDER_SUBTLE)),
+                                        .bg(rgb(t!(BORDER_SUBTLE))),
                                 )
                             })
                             .child(
@@ -1827,7 +1855,7 @@ impl MarinaWindow {
                                     div()
                                         .text_size(px(11.5))
                                         .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(TEXT_2))
+                                        .text_color(rgb(t!(TEXT_2)))
                                         .child("在线版本（需要下载）"),
                                 ),
                             )
@@ -1850,14 +1878,14 @@ impl MarinaWindow {
                         .map(|e| {
                             div()
                                 .text_size(px(12.))
-                                .text_color(rgb(DANGER))
+                                .text_color(rgb(t!(DANGER)))
                                 .child(format!("读取版本列表失败：{e}"))
                         })
                         .or_else(|| {
                             dialog.list_note.as_ref().map(|n| {
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(rgb(WARNING_TEXT))
+                                    .text_color(rgb(t!(WARNING_TEXT)))
                                     .child(n.clone())
                             })
                         })
@@ -1887,16 +1915,16 @@ impl MarinaWindow {
                         .py(px(10.))
                         .mb(px(8.))
                         .rounded(px(8.))
-                        .bg(rgba(PRIMARY_TINT_08))
+                        .bg(rgba(t!(PRIMARY_TINT_08)))
                         .border_1()
-                        .border_color(rgba(PRIMARY_TINT_25))
+                        .border_color(rgba(t!(PRIMARY_TINT_25)))
                         .child(
                             div()
                                 .w_full()
                                 .min_w(px(0.))
                                 .text_size(px(12.))
                                 .line_height(px(18.))
-                                .text_color(rgb(TEXT_2))
+                                .text_color(rgb(t!(TEXT_2)))
                                 .child("💡 运行时共用说明：多个实例可以共用同一个 DSH 运行时（程序文件），但每个实例的数据（插件、配置、会话、登录信息）是完全隔离的，互不影响。")
                         )
                 )
@@ -1909,7 +1937,7 @@ impl MarinaWindow {
                         .px(px(10.))
                         .py(px(6.))
                         .rounded(px(8.))
-                        .bg(rgb(BG_ELEVATED))
+                        .bg(rgb(t!(BG_ELEVATED)))
                         .child(hint("下载来源").flex_shrink_0())
                         .child(
                             div()
@@ -1918,7 +1946,7 @@ impl MarinaWindow {
                                 .truncate()
                                 .font_family(MONO)
                                 .text_size(px(11.5))
-                                .text_color(rgb(TEXT_2))
+                                .text_color(rgb(t!(TEXT_2)))
                                 .child(if dialog.feed_url.is_empty() { "未设置".to_owned() } else { dialog.feed_url.clone() }),
                         ),
                 )
@@ -1929,7 +1957,7 @@ impl MarinaWindow {
                         .max_h(px(240.))
                         .rounded(px(10.))
                         .border_1()
-                        .border_color(rgb(BORDER_SUBTLE))
+                        .border_color(rgb(t!(BORDER_SUBTLE)))
                         .when(empty, |el| {
                             el.child(div().p(px(12.)).child(hint(
                                 "没有可选的版本。实例会跟随最新稳定版，下载好 DSH 后就能启动。",
@@ -1963,7 +1991,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "新建实例",
-            TEXT,
+            t!(TEXT),
             600.,
             body()
                 .gap(px(18.))
@@ -1973,11 +2001,21 @@ impl MarinaWindow {
                         .child(Input::new(&dialog.name)),
                 )
                 .child(div().child(section("初始内容", None)).child(mode_row))
-                .child(detail)
-                .when_some(dialog.error.clone(), |el, error| {
-                    el.child(error_text(error))
-                }),
-            div().child(self.cancel_button(cx)).child(submit),
+                .child(detail),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .when_some(dialog.error.clone(), |el, error| {
+                            el.child(error_text(error).text_size(px(12.)).line_clamp(2))
+                        }),
+                )
+                .child(self.cancel_button(cx))
+                .child(submit),
         )
     }
 
@@ -2043,7 +2081,7 @@ impl MarinaWindow {
                         .px(px(12.))
                         .py(px(8.))
                         .rounded(px(8.))
-                        .when(is_selected, |el| el.bg(rgb(PRIMARY_MUTED)))
+                        .when(is_selected, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
                         .child(
                             div()
                                 .flex()
@@ -2053,16 +2091,20 @@ impl MarinaWindow {
                                 .justify_center()
                                 .rounded_full()
                                 .border_2()
-                                .border_color(rgb(if is_selected { PRIMARY } else { BORDER }))
+                                .border_color(rgb(if is_selected {
+                                    t!(PRIMARY)
+                                } else {
+                                    t!(BORDER)
+                                }))
                                 .when(is_selected, |el| {
-                                    el.child(div().size(px(6.)).rounded_full().bg(rgb(PRIMARY)))
+                                    el.child(div().size(px(6.)).rounded_full().bg(rgb(t!(PRIMARY))))
                                 }),
                         )
                         .child(
                             div()
                                 .font_family(MONO)
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(if is_selected { PRIMARY } else { TEXT }))
+                                .text_color(rgb(if is_selected { t!(PRIMARY) } else { t!(TEXT) }))
                                 .child(choice.version.clone()),
                         )
                         .child(if prerelease {
@@ -2089,7 +2131,7 @@ impl MarinaWindow {
                         if is_selected {
                             s
                         } else {
-                            s.bg(rgb(BG_ROW_HOVER))
+                            s.bg(rgb(t!(BG_ROW_HOVER)))
                         }
                     },
                 ),
@@ -2117,7 +2159,7 @@ impl MarinaWindow {
                         div()
                             .text_size(px(11.5))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(SUCCESS))
+                            .text_color(rgb(t!(SUCCESS)))
                             .child("✓ 本地已有运行时（无需下载）"),
                     ),
                 )
@@ -2134,7 +2176,7 @@ impl MarinaWindow {
                             .h(px(1.))
                             .mx(px(12.))
                             .my(px(8.))
-                            .bg(rgb(BORDER_SUBTLE)),
+                            .bg(rgb(t!(BORDER_SUBTLE))),
                     )
                 })
                 .child(
@@ -2142,7 +2184,7 @@ impl MarinaWindow {
                         div()
                             .text_size(px(11.5))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(TEXT_2))
+                            .text_color(rgb(t!(TEXT_2)))
                             .child("在线版本（需要下载）"),
                     ),
                 )
@@ -2154,7 +2196,7 @@ impl MarinaWindow {
             dialog.list_error.as_ref().map(|e| {
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(DANGER))
+                    .text_color(rgb(t!(DANGER)))
                     .child(format!("读取版本列表失败：{e}"))
             })
         };
@@ -2163,7 +2205,7 @@ impl MarinaWindow {
             div()
                 .mt(px(6.))
                 .text_size(px(12.))
-                .text_color(rgb(WARNING_TEXT))
+                .text_color(rgb(t!(WARNING_TEXT)))
                 .child(format!(
                     "市场索引声明这些插件不支持所选版本：{}。切换不会删除它们，启动后如异常可在插件页禁用。",
                     dialog.incompatible.join("、")
@@ -2186,7 +2228,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "更换运行时",
-            TEXT,
+            t!(TEXT),
             600.,
             body()
                 .gap(px(14.))
@@ -2197,13 +2239,13 @@ impl MarinaWindow {
                     el.child(
                         div()
                             .rounded(px(8.))
-                            .bg(rgba(PRIMARY_TINT_08))
+                            .bg(rgba(t!(PRIMARY_TINT_08)))
                             .border_1()
-                            .border_color(rgba(PRIMARY_TINT_25))
+                            .border_color(rgba(t!(PRIMARY_TINT_25)))
                             .px(px(12.))
                             .py(px(8.))
                             .text_size(px(12.))
-                            .text_color(rgb(TEXT_2))
+                            .text_color(rgb(t!(TEXT_2)))
                             .child(note),
                     )
                 })
@@ -2219,7 +2261,7 @@ impl MarinaWindow {
                         .max_h(px(260.))
                         .rounded(px(10.))
                         .border_1()
-                        .border_color(rgb(BORDER_SUBTLE))
+                        .border_color(rgb(t!(BORDER_SUBTLE)))
                         .when(empty, |el| {
                             el.child(div().p(px(12.)).child(hint(
                                 "没有可选的版本。稍后再试，或到设置里检查下载来源。",
@@ -2236,14 +2278,14 @@ impl MarinaWindow {
                         .gap(px(2.))
                         .rounded(px(10.))
                         .border_1()
-                        .border_color(rgb(BORDER_SUBTLE))
+                        .border_color(rgb(t!(BORDER_SUBTLE)))
                         .py(px(4.))
                         .child(
                             div().px(px(8.)).py(px(4.)).child(
                                 div()
                                     .text_size(px(11.5))
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(rgb(TEXT_2))
+                                    .text_color(rgb(t!(TEXT_2)))
                                     .child("自动跟随"),
                             ),
                         )
@@ -2256,7 +2298,7 @@ impl MarinaWindow {
                                     .px(px(12.))
                                     .py(px(8.))
                                     .rounded(px(8.))
-                                    .when(follow_selected, |el| el.bg(rgb(PRIMARY_MUTED)))
+                                    .when(follow_selected, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
                                     .child(
                                         div()
                                             .flex()
@@ -2267,16 +2309,16 @@ impl MarinaWindow {
                                             .rounded_full()
                                             .border_2()
                                             .border_color(rgb(if follow_selected {
-                                                PRIMARY
+                                                t!(PRIMARY)
                                             } else {
-                                                BORDER
+                                                t!(BORDER)
                                             }))
                                             .when(follow_selected, |el| {
                                                 el.child(
                                                     div()
                                                         .size(px(6.))
                                                         .rounded_full()
-                                                        .bg(rgb(PRIMARY)),
+                                                        .bg(rgb(t!(PRIMARY))),
                                                 )
                                             }),
                                     )
@@ -2284,9 +2326,9 @@ impl MarinaWindow {
                                         div()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(rgb(if follow_selected {
-                                                PRIMARY
+                                                t!(PRIMARY)
                                             } else {
-                                                TEXT
+                                                t!(TEXT)
                                             }))
                                             .child("最新稳定版"),
                                     )
@@ -2299,7 +2341,7 @@ impl MarinaWindow {
                                     if follow_selected {
                                         s
                                     } else {
-                                        s.bg(rgb(BG_ROW_HOVER))
+                                        s.bg(rgb(t!(BG_ROW_HOVER)))
                                     }
                                 },
                             ),
@@ -2320,7 +2362,7 @@ impl MarinaWindow {
                         div()
                             .mt(px(6.))
                             .text_size(px(12.))
-                            .text_color(rgb(WARNING_TEXT))
+                            .text_color(rgb(t!(WARNING_TEXT)))
                             .child(note),
                     )
                 })
@@ -2337,6 +2379,7 @@ impl MarinaWindow {
     }
 
     /// 整合包详情：列出包含的所有插件。
+    #[allow(clippy::too_many_arguments)] // 对话框渲染参数天然多，拆分属于后续重构
     fn render_pack_plugins_dialog(
         &self,
         name: String,
@@ -2373,7 +2416,7 @@ impl MarinaWindow {
                             .w(px(24.))
                             .flex_shrink_0()
                             .text_size(px(11.))
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .child(format!("{}", index + 1)),
                     )
                     .child(
@@ -2390,7 +2433,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "整合包详情",
-            TEXT,
+            t!(TEXT),
             560.,
             body()
                 .gap(px(12.))
@@ -2495,7 +2538,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "社区设置",
-            TEXT,
+            t!(TEXT),
             560.,
             body()
                 .gap(px(18.))
@@ -2503,7 +2546,7 @@ impl MarinaWindow {
                     "整合包列表来自社区仓库；分享自己的整合包需要 GitHub 账号",
                 ))
                 .child(source)
-                .child(div().h(px(1.)).bg(rgb(BORDER_SUBTLE)))
+                .child(div().h(px(1.)).bg(rgb(t!(BORDER_SUBTLE))))
                 .child(account),
             div()
                 .flex()
@@ -2534,6 +2577,7 @@ impl MarinaWindow {
         )
     }
 
+    #[allow(clippy::too_many_arguments)] // 对话框渲染参数天然多，拆分属于后续重构
     fn render_share_pack_dialog(
         &self,
         instance: Option<String>,
@@ -2560,21 +2604,21 @@ impl MarinaWindow {
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .when(active, |el| {
-                            el.border_color(rgb(PRIMARY))
-                                .bg(rgb(PRIMARY_MUTED))
-                                .text_color(rgb(PRIMARY))
+                            el.border_color(rgb(t!(PRIMARY)))
+                                .bg(rgb(t!(PRIMARY_MUTED)))
+                                .text_color(rgb(t!(PRIMARY)))
                         })
                         .when(!active, |el| {
-                            el.border_color(rgb(BORDER_SUBTLE))
-                                .bg(rgb(BG_CARD))
-                                .text_color(rgb(TEXT_2))
+                            el.border_color(rgb(t!(BORDER_SUBTLE)))
+                                .bg(rgb(t!(BG_CARD)))
+                                .text_color(rgb(t!(TEXT_2)))
                         })
                         .child(title),
                     move |s| {
                         if active {
                             s
                         } else {
-                            s.bg(rgb(BG_HOVER)).text_color(rgb(TEXT))
+                            s.bg(rgb(t!(BG_HOVER))).text_color(rgb(t!(TEXT)))
                         }
                     },
                 ),
@@ -2612,9 +2656,9 @@ impl MarinaWindow {
                 .justify_center()
                 .rounded_full()
                 .border_1()
-                .border_color(rgb(if selected { PRIMARY } else { BORDER }))
+                .border_color(rgb(if selected { t!(PRIMARY) } else { t!(BORDER) }))
                 .when(selected, |el| {
-                    el.child(div().size(px(8.)).rounded_full().bg(rgb(PRIMARY)))
+                    el.child(div().size(px(8.)).rounded_full().bg(rgb(t!(PRIMARY))))
                 })
         };
 
@@ -2624,7 +2668,7 @@ impl MarinaWindow {
             .flex_col()
             .rounded(px(10.))
             .border_1()
-            .border_color(rgb(BORDER_SUBTLE))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
             .overflow_hidden()
             .max_h(px(190.))
             .overflow_y_scrollbar()
@@ -2645,9 +2689,9 @@ impl MarinaWindow {
                             .px(px(13.))
                             .py(px(9.))
                             .when(index > 0, |el| {
-                                el.border_t_1().border_color(rgb(BORDER_SUBTLE))
+                                el.border_t_1().border_color(rgb(t!(BORDER_SUBTLE)))
                             })
-                            .when(is_selected, |el| el.bg(rgb(PRIMARY_MUTED)))
+                            .when(is_selected, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
                             .child(radio(is_selected))
                             .child(
                                 div()
@@ -2662,7 +2706,7 @@ impl MarinaWindow {
                             if is_selected {
                                 s
                             } else {
-                                s.bg(rgb(BG_ROW_HOVER))
+                                s.bg(rgb(t!(BG_ROW_HOVER)))
                             }
                         },
                     ),
@@ -2696,15 +2740,15 @@ impl MarinaWindow {
                             .py(px(7.))
                             .rounded(px(8.))
                             .border_1()
-                            .border_color(rgb(BORDER_SUBTLE))
-                            .bg(rgb(BG_ELEVATED))
+                            .border_color(rgb(t!(BORDER_SUBTLE)))
+                            .bg(rgb(t!(BG_ELEVATED)))
                             .font_family(MONO)
                             .text_size(px(12.))
                             .truncate()
                             .text_color(rgb(if selected_folder.is_some() {
-                                TEXT_2
+                                t!(TEXT_2)
                             } else {
-                                TEXT_3
+                                t!(TEXT_3)
                             }))
                             .child(folder_display),
                     )
@@ -2726,21 +2770,21 @@ impl MarinaWindow {
                     .px(px(12.))
                     .py(px(8.))
                     .rounded(px(9.))
-                    .bg(rgba(SUCCESS_TINT_08))
+                    .bg(rgba(t!(SUCCESS_TINT_08)))
                     .border_1()
-                    .border_color(rgba(SUCCESS_TINT_24))
+                    .border_color(rgba(t!(SUCCESS_TINT_24)))
                     .child(
                         div()
                             .size(px(7.))
                             .flex_shrink_0()
                             .rounded_full()
-                            .bg(rgb(SUCCESS)),
+                            .bg(rgb(t!(SUCCESS))),
                     )
                     .child(
                         div()
                             .text_size(px(12.5))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(t!(TEXT)))
                             .child(auth.username.clone()),
                     )
                     .child(hint("已连接 GitHub").text_size(px(12.)))
@@ -2750,9 +2794,9 @@ impl MarinaWindow {
                             div()
                                 .flex_shrink_0()
                                 .text_size(px(12.))
-                                .text_color(rgb(TEXT_3))
+                                .text_color(rgb(t!(TEXT_3)))
                                 .child("退出登录"),
-                            |s| s.text_color(rgb(DANGER)),
+                            |s| s.text_color(rgb(t!(DANGER))),
                         ),
                         !busy,
                         cx.listener(|this, _, _, cx| {
@@ -2769,9 +2813,9 @@ impl MarinaWindow {
                     .px(px(12.))
                     .py(px(8.))
                     .rounded(px(9.))
-                    .bg(rgb(BG_ELEVATED))
+                    .bg(rgb(t!(BG_ELEVATED)))
                     .border_1()
-                    .border_color(rgb(BORDER_SUBTLE))
+                    .border_color(rgb(t!(BORDER_SUBTLE)))
                     .child(hint("需要连接 GitHub 账号才能提交到社区，连接一次即可"))
                     .child(div().flex_1())
                     .child(clickable(
@@ -2814,7 +2858,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "分享整合包",
-            TEXT,
+            t!(TEXT),
             640.,
             body()
                 .gap(px(16.))
@@ -2881,7 +2925,7 @@ impl MarinaWindow {
         if user_code.is_empty() && !connecting {
             return dialog_shell(
                 "连接 GitHub 账号",
-                TEXT,
+                t!(TEXT),
                 500.,
                 body()
                     .gap(px(18.))
@@ -2911,7 +2955,7 @@ impl MarinaWindow {
         if user_code.is_empty() && connecting {
             return dialog_shell(
                 "连接 GitHub 账号",
-                TEXT,
+                t!(TEXT),
                 500.,
                 body()
                     .gap(px(18.))
@@ -2930,19 +2974,19 @@ impl MarinaWindow {
             .py(px(20.))
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER_SUBTLE))
-            .bg(rgb(BG_ELEVATED))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
+            .bg(rgb(t!(BG_ELEVATED)))
             .child(
                 div()
                     .text_size(px(32.))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(PRIMARY))
+                    .text_color(rgb(t!(PRIMARY)))
                     .child(user_code.clone()),
             )
             .child(
                 div()
                     .text_size(px(13.))
-                    .text_color(rgb(TEXT_3))
+                    .text_color(rgb(t!(TEXT_3)))
                     .child(format!("请访问 {verification_uri} 并输入上方代码完成授权")),
             );
 
@@ -2966,7 +3010,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "连接 GitHub 账号",
-            TEXT,
+            t!(TEXT),
             500.,
             body()
                 .gap(px(18.))
@@ -2987,7 +3031,7 @@ impl MarinaWindow {
                             .items_center()
                             .gap(px(8.))
                             .text_size(px(13.))
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .child("⏳")
                             .child("等待授权中...")
                     )
@@ -2997,6 +3041,7 @@ impl MarinaWindow {
         )
     }
 
+    #[allow(clippy::too_many_arguments)] // 对话框渲染参数天然多，拆分属于后续重构
     fn render_share_to_community_dialog(
         &self,
         pack_name: &str,
@@ -3015,10 +3060,10 @@ impl MarinaWindow {
             .gap(px(8.))
             .children(steps.iter().map(|(step_name, status)| {
                 let (icon, color) = match status {
-                    ShareStepStatus::Pending => ("○", TEXT_3),
-                    ShareStepStatus::InProgress => ("→", PRIMARY),
-                    ShareStepStatus::Completed => ("✓", SUCCESS),
-                    ShareStepStatus::Failed => ("✗", DANGER),
+                    ShareStepStatus::Pending => ("○", t!(TEXT_3)),
+                    ShareStepStatus::InProgress => ("→", t!(PRIMARY)),
+                    ShareStepStatus::Completed => ("✓", t!(SUCCESS)),
+                    ShareStepStatus::Failed => ("✗", t!(DANGER)),
                 };
                 div()
                     .flex()
@@ -3029,9 +3074,9 @@ impl MarinaWindow {
                         div()
                             .text_size(px(13.))
                             .text_color(rgb(if *status == ShareStepStatus::Pending {
-                                TEXT_3
+                                t!(TEXT_3)
                             } else {
-                                TEXT
+                                t!(TEXT)
                             }))
                             .child(step_name.clone()),
                     )
@@ -3041,13 +3086,13 @@ impl MarinaWindow {
             .w_full()
             .h(px(8.))
             .rounded(px(4.))
-            .bg(rgb(BG_ELEVATED))
+            .bg(rgb(t!(BG_ELEVATED)))
             .child(
                 div()
                     .h_full()
                     .w(relative(progress as f32 / 100.0))
                     .rounded(px(4.))
-                    .bg(rgb(PRIMARY)),
+                    .bg(rgb(t!(PRIMARY))),
             );
 
         let is_success = pr_url.is_some();
@@ -3071,9 +3116,9 @@ impl MarinaWindow {
                         .px(px(16.))
                         .py(px(12.))
                         .rounded(px(8.))
-                        .bg(rgb(BG_ELEVATED))
+                        .bg(rgb(t!(BG_ELEVATED)))
                         .border_1()
-                        .border_color(rgb(BORDER_SUBTLE))
+                        .border_color(rgb(t!(BORDER_SUBTLE)))
                         .child(
                             div()
                                 .flex()
@@ -3093,9 +3138,9 @@ impl MarinaWindow {
                             .px(px(16.))
                             .py(px(10.))
                             .rounded(px(8.))
-                            .bg(rgb(PRIMARY))
-                            .text_color(rgb(TEXT_ON_PRIMARY))
-                            .hover(|s| s.bg(rgb(PRIMARY_HOVER)))
+                            .bg(rgb(t!(PRIMARY)))
+                            .text_color(rgb(t!(TEXT_ON_PRIMARY)))
+                            .hover(|s| s.bg(rgb(t!(PRIMARY_HOVER))))
                             .cursor(CursorStyle::PointingHand)
                             .child("查看 Pull Request"),
                         true,
@@ -3127,7 +3172,7 @@ impl MarinaWindow {
                         .justify_center()
                         .gap(px(6.))
                         .text_size(px(13.))
-                        .text_color(rgb(TEXT_3))
+                        .text_color(rgb(t!(TEXT_3)))
                         .child(format!("{}%", progress)),
                 )
                 .when_some(error, |el, err| el.child(error_text(err)))
@@ -3177,7 +3222,7 @@ impl MarinaWindow {
             } else {
                 "正在分享"
             },
-            TEXT,
+            t!(TEXT),
             500.,
             content,
             footer,
@@ -3233,7 +3278,7 @@ impl MarinaWindow {
 
         dialog_shell(
             "删除实例",
-            TEXT,
+            t!(TEXT),
             580.,
             body()
                 .child(paragraph(format!(
@@ -3268,8 +3313,12 @@ impl MarinaWindow {
                 .py(px(14.))
                 .rounded(px(11.))
                 .border_1()
-                .border_color(rgb(if error { ERROR_BORDER_SOFT } else { BORDER }))
-                .bg(rgb(BG_CARD))
+                .border_color(rgb(if error {
+                    t!(ERROR_BORDER_SOFT)
+                } else {
+                    t!(BORDER)
+                }))
+                .bg(rgb(t!(BG_CARD)))
                 .shadow_lg()
                 .child(
                     div()
@@ -3277,7 +3326,7 @@ impl MarinaWindow {
                         .mt(px(5.))
                         .size(px(8.))
                         .rounded_full()
-                        .bg(rgb(if error { DANGER } else { SUCCESS })),
+                        .bg(rgb(if error { t!(DANGER) } else { t!(SUCCESS) })),
                 )
                 .child(
                     div()
@@ -3290,8 +3339,8 @@ impl MarinaWindow {
                     div()
                         .flex_shrink_0()
                         .px(px(4.))
-                        .text_color(rgb(TEXT_3))
-                        .hover(|s| s.text_color(rgb(TEXT)))
+                        .text_color(rgb(t!(TEXT_3)))
+                        .hover(|s| s.text_color(rgb(t!(TEXT))))
                         .child("✕"),
                     true,
                     cx.listener(move |this, _, _, cx| {

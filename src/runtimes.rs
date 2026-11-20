@@ -16,9 +16,64 @@ use thiserror::Error;
 
 pub const LATEST_STABLE: &str = "latest-stable";
 pub const EXTERNAL_RUNTIME_ID: &str = "external";
+/// Name of the DSH main executable inside its install layout.
+#[cfg(windows)]
 pub const DSH_EXECUTABLE_NAME: &str = "DeepSeek Harness.exe";
+#[cfg(not(windows))]
+pub const DSH_EXECUTABLE_NAME: &str = "DeepSeek Harness";
+/// macOS ships DSH as an `.app` bundle; Windows unpacks files flat.
+pub const DSH_BUNDLE_NAME: &str = "DeepSeek Harness.app";
 const RUNTIME_METADATA_FILE: &str = "marina-runtime.json";
 const MAX_ASAR_HEADER_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Path of the DSH executable inside a runtime version directory.
+///
+/// Windows: `<dir>/DeepSeek Harness.exe`.
+/// macOS: `<dir>/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness`.
+pub fn runtime_executable(dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        dir.join(DSH_EXECUTABLE_NAME)
+    }
+    #[cfg(not(windows))]
+    {
+        dir.join(DSH_BUNDLE_NAME)
+            .join("Contents")
+            .join("MacOS")
+            .join(DSH_EXECUTABLE_NAME)
+    }
+}
+
+/// The directory holding `app.asar` inside a runtime version directory.
+/// Windows: `<dir>/resources`.  macOS: `<dir>/…app/Contents/Resources`.
+pub fn runtime_resources_dir(dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        dir.join("resources")
+    }
+    #[cfg(not(windows))]
+    {
+        dir.join(DSH_BUNDLE_NAME).join("Contents").join("Resources")
+    }
+}
+
+/// The resources directory derived from the main executable path (the inverse
+/// of [`runtime_executable`]'s leaf).  Used to locate `app.asar` for version
+/// reads and the bundled CLI.
+pub fn resources_dir_for_executable(executable: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        executable.parent().map(|dir| dir.join("resources"))
+    }
+    #[cfg(not(windows))]
+    {
+        // …/Contents/MacOS/<exe> → …/Contents/Resources
+        executable
+            .parent()?
+            .parent()
+            .map(|dir| dir.join("Resources"))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -153,7 +208,7 @@ impl RuntimeRegistry {
             if directory_name.starts_with('.') {
                 continue;
             }
-            let executable = entry.path().join(DSH_EXECUTABLE_NAME);
+            let executable = runtime_executable(&entry.path());
             if !executable.is_file() {
                 continue;
             }
@@ -184,6 +239,7 @@ impl RuntimeRegistry {
         if let Some(configured) = configured {
             candidates.push(configured.to_path_buf());
         }
+        #[cfg(windows)]
         if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
             candidates.push(
                 PathBuf::from(local_app_data)
@@ -191,6 +247,16 @@ impl RuntimeRegistry {
                     .join("DeepSeek Harness")
                     .join(DSH_EXECUTABLE_NAME),
             );
+        }
+        #[cfg(not(windows))]
+        {
+            // Conventional macOS install locations for the original DSH.
+            for applications in [
+                PathBuf::from("/Applications"),
+                crate::platform::home_dir().join("Applications"),
+            ] {
+                candidates.push(runtime_executable(&applications));
+            }
         }
         for executable in candidates {
             if !executable.is_file() {
@@ -353,7 +419,15 @@ fn managed_directory(runtime: &RuntimeInfo) -> Option<&Path> {
     if runtime.is_external() {
         return None;
     }
-    runtime.executable.parent()
+    #[cfg(windows)]
+    {
+        runtime.executable.parent()
+    }
+    #[cfg(not(windows))]
+    {
+        // …/<version>/…app/Contents/MacOS/<exe> → <version>
+        runtime.executable.parent()?.parent()?.parent()?.parent()
+    }
 }
 
 fn write_metadata(directory: &Path, metadata: &RuntimeMetadata) -> Result<(), RuntimeError> {
@@ -370,9 +444,9 @@ pub fn fingerprint(runtime_dir: &Path) -> std::io::Result<String> {
     use std::time::UNIX_EPOCH;
 
     let mut files = Vec::new();
-    let executable = runtime_dir.join(DSH_EXECUTABLE_NAME);
+    let executable = runtime_executable(runtime_dir);
     files.push((DSH_EXECUTABLE_NAME.to_owned(), fs::metadata(&executable)?));
-    let mut pending = vec![(runtime_dir.join("resources"), "resources".to_owned())];
+    let mut pending = vec![(runtime_resources_dir(runtime_dir), "resources".to_owned())];
     while let Some((directory, relative)) = pending.pop() {
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
@@ -482,7 +556,7 @@ fn read_metadata(directory: &Path) -> Result<Option<RuntimeMetadata>, RuntimeErr
 /// An asar file is a small pickle header followed by a JSON directory index and
 /// the concatenated file payloads.  We only need the `package.json` entry.
 pub fn read_dsh_version(executable: &Path) -> Option<String> {
-    let asar = executable.parent()?.join("resources").join("app.asar");
+    let asar = resources_dir_for_executable(executable)?.join("app.asar");
     read_asar_package_version(&asar)
 }
 
@@ -587,8 +661,8 @@ mod tests {
 
     fn write_fake_runtime(root: &Path, name: &str) -> PathBuf {
         let directory = root.join("runtimes").join(name);
-        fs::create_dir_all(&directory).unwrap();
-        let executable = directory.join(DSH_EXECUTABLE_NAME);
+        let executable = runtime_executable(&directory);
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"placeholder").unwrap();
         executable
     }
@@ -724,7 +798,7 @@ mod tests {
     fn fingerprint_is_recorded_on_install_and_detects_changes() {
         let root = tempdir().unwrap();
         let executable = write_fake_runtime(root.path(), "0.2.0");
-        let resources = executable.parent().unwrap().join("resources");
+        let resources = resources_dir_for_executable(&executable).unwrap();
         fs::create_dir_all(resources.join("app.asar.unpacked")).unwrap();
         fs::write(resources.join("app.asar"), b"asar").unwrap();
         fs::write(resources.join("app.asar.unpacked/x.node"), b"x").unwrap();

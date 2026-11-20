@@ -1,0 +1,124 @@
+name: Release
+
+# 一次推送全自动：向 main 推送（或打 v* 标签）后，若 Cargo.toml 的版本还没有对应
+# Release，则双端打包、发布 GitHub Release、自动把 update.json 提交回 main，
+# 并在配置了 CNB_GIT_TOKEN 时把 main + 标签同步到 CNB 镜像。
+# 更新包只做 SHA-256 校验、不做签名，因此整个流程不需要任何密钥。
+# 版本未变化的普通推送会被 check 任务跳过，不重复打包。
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      skip: ${{ steps.v.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and skip if already released
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "v$version 已发布，跳过本次打包。"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  package:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Package (SHA-256, no signing key)
+        run: cargo xtask package
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: [check, package]
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Assemble update.json
+        run: cargo xtask manifest --tag "v${{ needs.check.outputs.version }}" --notes CHANGELOG.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check.outputs.version }}
+          body_path: release-body.md
+          files: |
+            dist/*.exe
+            dist/*.sha256
+            dist/*.dmg
+            dist/*.tar.gz
+            update.json
+
+      - name: Commit update.json back to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          git commit -m "release: v${{ needs.check.outputs.version }} update.json" || exit 0
+          git push origin HEAD:main
+
+      - name: Sync CNB mirror (optional)
+        env:
+          CNB_GIT_TOKEN: ${{ secrets.CNB_GIT_TOKEN }}
+          CNB_GIT_USER: ${{ secrets.CNB_GIT_USER }}
+        run: |
+          if [ -z "$CNB_GIT_TOKEN" ]; then
+            echo "未配置 CNB_GIT_TOKEN，跳过 CNB 同步（可在 CNB 侧开启镜像自动同步）。"
+            exit 0
+          fi
+          user="${CNB_GIT_USER:-cnb}"
+          git remote add cnb "https://${user}:${CNB_GIT_TOKEN}@cnb.cool/${{ github.repository }}.git"
+          git push cnb HEAD:main --tags
+
+      - name: Summary
+        run: |
+          echo "v${{ needs.check.outputs.version }} 已发布：Release 资产 + update.json 已自动提交到 main。"
+          echo "更新包仅 SHA-256 校验，无需任何签名密钥。"

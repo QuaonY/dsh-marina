@@ -5,6 +5,7 @@
 use reqwest::blocking::{Client, ClientBuilder};
 use std::time::Duration;
 
+#[cfg(windows)]
 const INTERNET_SETTINGS: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
 #[cfg(not(windows))]
@@ -109,8 +110,49 @@ pub fn builder(timeout: Duration) -> ClientBuilder {
     }
 }
 
+/// A shared client per (timeout, proxy configuration), so repeated calls reuse
+/// one connection pool instead of paying a fresh TLS handshake per request,
+/// while a proxy change in Settings still takes effect without a restart.
 pub fn client(timeout: Duration) -> reqwest::Result<Client> {
-    builder(timeout).build()
+    static CACHE: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<(u64, String), Client>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let key = (timeout.as_secs(), proxy_signature());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = cache.get(&key) {
+        return Ok(existing.clone());
+    }
+    let built = builder(timeout).build()?;
+    cache.insert(key, built.clone());
+    Ok(built)
+}
+
+/// Fingerprint of everything `builder` reads to decide the proxy.  When the
+/// user changes the proxy (or env vars change) this differs, so `client`
+/// builds a fresh client instead of reusing one with the stale proxy.
+fn proxy_signature() -> String {
+    let env: Vec<String> = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .iter()
+    .filter_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+    .collect();
+    if !env.is_empty() {
+        return format!("env={}", env.join(";"));
+    }
+    let no_proxy = ["NO_PROXY", "no_proxy"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_default();
+    match system_proxy() {
+        Some((url, bypass)) => format!("sys={url}|{bypass}|{no_proxy}"),
+        None => format!("direct|{no_proxy}"),
+    }
 }
 
 #[cfg(test)]

@@ -78,9 +78,7 @@ impl PluginCommand {
 
 /// Path of the CLI entry inside the runtime's `app.asar`.
 pub fn cli_entry(dsh_executable: &Path) -> Result<PathBuf, DshCliError> {
-    let resources = dsh_executable
-        .parent()
-        .map(|directory| directory.join("resources"))
+    let resources = crate::runtimes::resources_dir_for_executable(dsh_executable)
         .ok_or_else(|| DshCliError::Unavailable(dsh_executable.to_path_buf()))?;
     let archive = resources.join("app.asar");
     if !archive.exists() {

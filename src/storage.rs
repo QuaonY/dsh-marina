@@ -117,19 +117,16 @@ pub fn format_duration(seconds: u64) -> String {
 }
 
 pub fn desktop_directory() -> PathBuf {
-    let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    if let Some(profile) = &profile {
-        let desktop = profile.join("Desktop");
-        if desktop.is_dir() {
-            return desktop;
-        }
-        let one_drive = profile.join("OneDrive").join("Desktop");
-        if one_drive.is_dir() {
-            return one_drive;
-        }
+    let profile = crate::platform::home_dir();
+    let desktop = profile.join("Desktop");
+    if desktop.is_dir() {
         return desktop;
     }
-    std::env::temp_dir()
+    let one_drive = profile.join("OneDrive").join("Desktop");
+    if one_drive.is_dir() {
+        return one_drive;
+    }
+    desktop
 }
 
 pub fn backup_directory(data_root: &Path) -> PathBuf {
@@ -305,12 +302,11 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-/// Launch a detached cmd script that removes Marina after the process exits.
-/// `remove_data` is false when the data directory has already been moved.
 /// Run the NSIS uninstaller once Marina has exited.
 ///
 /// The uninstaller removes the program files, shortcuts and the entry under
 /// 「应用和功能」; waiting here keeps it from tripping over the running exe.
+#[cfg(windows)]
 pub fn spawn_installer_uninstall(uninstaller: &Path) -> Result<PathBuf, StorageError> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -348,6 +344,9 @@ pub fn spawn_installer_uninstall(uninstaller: &Path) -> Result<PathBuf, StorageE
     Ok(script)
 }
 
+/// Launch a detached cmd script that removes Marina after the process exits.
+/// `remove_data` is false when the data directory has already been moved.
+#[cfg(windows)]
 pub fn spawn_uninstall_script(
     executable: &Path,
     data_root: &Path,
@@ -401,6 +400,7 @@ pub fn spawn_uninstall_script(
 
 /// Quote a path for a batch file.  `%` would be expanded by cmd and a trailing
 /// separator would escape the closing quote, so both are handled here.
+#[cfg(windows)]
 fn batch_escape(path: &Path) -> String {
     let text = path.display().to_string().replace('%', "%%");
     let text = text.trim_end_matches(['\\', '/']);

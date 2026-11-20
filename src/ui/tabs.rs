@@ -33,7 +33,7 @@ impl MarinaWindow {
 
         let body = if suspects.is_empty() {
             div()
-                .text_color(rgb(TEXT_2))
+                .text_color(rgb(t!(TEXT_2)))
                 .child("没有找到嫌疑插件。可以回滚到上次正常状态，或查看日志排查原因。")
         } else {
             div()
@@ -41,7 +41,7 @@ impl MarinaWindow {
                 .flex_wrap()
                 .items_center()
                 .gap(px(6.))
-                .text_color(rgb(TEXT_2))
+                .text_color(rgb(t!(TEXT_2)))
                 .child("距上次正常启动，这些插件是嫌疑对象：")
                 .children(suspects.iter().map(|name| {
                     div()
@@ -49,9 +49,9 @@ impl MarinaWindow {
                         .py(px(2.))
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(rgba(DANGER_TINT_25))
-                        .bg(rgba(DANGER_TINT_15))
-                        .text_color(rgb(DANGER))
+                        .border_color(rgba(t!(DANGER_TINT_25)))
+                        .bg(rgba(t!(DANGER_TINT_15)))
+                        .text_color(rgb(t!(DANGER)))
                         .font_family(MONO)
                         .text_size(px(12.))
                         .font_weight(FontWeight::SEMIBOLD)
@@ -139,8 +139,8 @@ impl MarinaWindow {
             .py(px(20.))
             .rounded(px(12.))
             .border_1()
-            .border_color(rgba(DANGER_TINT_25))
-            .bg(rgba(DANGER_TINT_08))
+            .border_color(rgba(t!(DANGER_TINT_25)))
+            .bg(rgba(t!(DANGER_TINT_08)))
             .child(
                 div()
                     .flex()
@@ -149,8 +149,8 @@ impl MarinaWindow {
                     .items_center()
                     .justify_center()
                     .rounded_full()
-                    .bg(rgba(DANGER_TINT_20))
-                    .text_color(rgb(DANGER))
+                    .bg(rgba(t!(DANGER_TINT_20)))
+                    .text_color(rgb(t!(DANGER)))
                     .text_size(px(20.))
                     .font_weight(FontWeight::BLACK)
                     .child("!"),
@@ -166,7 +166,7 @@ impl MarinaWindow {
                         div()
                             .text_size(px(15.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(DANGER))
+                            .text_color(rgb(t!(DANGER)))
                             .child(title),
                     )
                     .child(body)
@@ -216,7 +216,7 @@ impl MarinaWindow {
                         div()
                             .w(px(120.))
                             .flex_shrink_0()
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .child(key),
                     )
                     .child(
@@ -369,7 +369,7 @@ impl MarinaWindow {
                                     .flex_shrink_0()
                                     .font_family(MONO)
                                     .text_size(px(12.))
-                                    .text_color(rgb(TEXT_3))
+                                    .text_color(rgb(t!(TEXT_3)))
                                     .child(plugin.version.clone()),
                             ),
                     )
@@ -482,13 +482,13 @@ impl MarinaWindow {
                     ));
                 }
                 row_item(index == 0)
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .size(px(14.))
-                            .rounded_full()
-                            .bg(rgb(if snapshot.last_good { SUCCESS } else { STOPPED })),
-                    )
+                    .child(div().flex_shrink_0().size(px(14.)).rounded_full().bg(rgb(
+                        if snapshot.last_good {
+                            t!(SUCCESS)
+                        } else {
+                            t!(STOPPED)
+                        },
+                    )))
                     .child(
                         div()
                             .flex()
@@ -563,10 +563,10 @@ impl MarinaWindow {
                 .filter_map(|index| entries.get(index))
                 .map(|entry| {
                     let level_color = match entry.level {
-                        "ERROR" => DANGER,
-                        "WARN" => ACCENT,
-                        "DEBUG" => STOPPED,
-                        _ => INFO,
+                        "ERROR" => t!(DANGER),
+                        "WARN" => t!(ACCENT),
+                        "DEBUG" => t!(STOPPED),
+                        _ => t!(INFO),
                     };
                     div()
                         .flex()
@@ -576,7 +576,7 @@ impl MarinaWindow {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .text_color(rgb(STOPPED))
+                                .text_color(rgb(t!(STOPPED)))
                                 .child(entry.time.clone()),
                         )
                         .child(
@@ -611,11 +611,11 @@ impl MarinaWindow {
             .py(px(16.))
             .rounded(px(11.))
             .border_1()
-            .border_color(rgb(BORDER_SUBTLE))
-            .bg(rgb(LOG_BG))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
+            .bg(rgb(t!(LOG_BG)))
             .font_family(MONO)
             .text_size(px(12.))
-            .text_color(rgb(LOG_TEXT))
+            .text_color(rgb(t!(LOG_TEXT)))
             .when(count == 0, |el| el.child("暂无日志输出"))
             .when(count > 0, |el| {
                 el.child(hint(format!("最近 {count} 行（最多 {LOG_LINES} 行）")))

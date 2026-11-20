@@ -145,33 +145,21 @@ pub struct LatestRelease {
     /// Release notes in GitHub-flavoured Markdown.
     #[serde(default)]
     pub body: String,
+    /// 旧版兼容字段：清单仍带 assets，供 v0.1.2 旧客户端读取；
+    /// 新版自更新改走 cargo-packager-updater，本程序不再读取这些资产。
     #[serde(default)]
+    #[allow(dead_code)]
     pub assets: Vec<ReleaseAsset>,
 }
 
 /// One downloadable file attached to a release.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ReleaseAsset {
     pub name: String,
     pub browser_download_url: String,
     #[serde(default)]
     pub size: u64,
-}
-
-impl LatestRelease {
-    /// The portable executable attached to this release, if any.
-    pub fn windows_exe(&self) -> Option<&ReleaseAsset> {
-        self.assets
-            .iter()
-            .find(|asset| asset.name.ends_with("-windows-x64.exe"))
-    }
-
-    /// The `...exe.sha256` sibling published next to the executable.
-    pub fn windows_exe_sha256(&self) -> Option<&ReleaseAsset> {
-        self.assets
-            .iter()
-            .find(|asset| asset.name.ends_with("-windows-x64.exe.sha256"))
-    }
 }
 
 /// 查询 DSH Marina 的最新正式版发布；仓库还没有正式版时返回 `Ok(None)`。
@@ -252,47 +240,7 @@ fn token_file(data_root: &Path) -> std::path::PathBuf {
     data_root.join("github_token.json")
 }
 
-/// 用当前 Windows 账号加密 / 解密 token（DPAPI）。
-///
-/// 数据目录被复制到别的机器、别的账号或云同步里时，token 无法解密，
-/// Marina 会回到「未登录」状态，而不会把凭据泄露出去。
-#[cfg(windows)]
-fn dpapi(input: &[u8], encrypt: bool) -> Option<Vec<u8>> {
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
-    use windows::Win32::Security::Cryptography::{
-        CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData,
-    };
-    use windows::core::PCWSTR;
-
-    let in_blob = CRYPT_INTEGER_BLOB {
-        cbData: u32::try_from(input.len()).ok()?,
-        pbData: input.as_ptr().cast_mut(),
-    };
-    let mut out_blob = CRYPT_INTEGER_BLOB::default();
-    let result = unsafe {
-        if encrypt {
-            CryptProtectData(&in_blob, PCWSTR::null(), None, None, None, 0, &mut out_blob)
-        } else {
-            CryptUnprotectData(&in_blob, None, None, None, None, 0, &mut out_blob)
-        }
-    };
-    if result.is_err() || out_blob.pbData.is_null() {
-        return None;
-    }
-    let bytes =
-        unsafe { std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize) }.to_vec();
-    unsafe {
-        LocalFree(Some(HLOCAL(out_blob.pbData.cast())));
-    }
-    Some(bytes)
-}
-
-#[cfg(not(windows))]
-fn dpapi(_input: &[u8], _encrypt: bool) -> Option<Vec<u8>> {
-    None
-}
-
-/// 保存 token 到文件；加密不可用时退回明文（旧文件也继续可读）。
+/// 保存 token 到文件；OS 级保护不可用时退回明文（旧文件也继续可读）。
 pub fn save_token(data_root: &Path, token: &str, user: &GitHubUser) -> Result<(), String> {
     #[derive(Serialize)]
     struct TokenData<'a> {
@@ -301,7 +249,7 @@ pub fn save_token(data_root: &Path, token: &str, user: &GitHubUser) -> Result<()
         user: &'a GitHubUser,
     }
 
-    let (token, encrypted) = match dpapi(token.as_bytes(), true) {
+    let (token, encrypted) = match dsh_marina::secure_store::protect(token.as_bytes()) {
         Some(blob) => (base64::engine::general_purpose::STANDARD.encode(blob), true),
         None => (token.to_owned(), false),
     };
@@ -342,16 +290,17 @@ pub fn load_token(data_root: &Path) -> Option<(String, GitHubUser)> {
         let blob = base64::engine::general_purpose::STANDARD
             .decode(data.token.as_bytes())
             .ok()?;
-        String::from_utf8(dpapi(&blob, false)?).ok()?
+        String::from_utf8(dsh_marina::secure_store::unprotect(&blob)?).ok()?
     } else {
         data.token
     };
     Some((token, data.user))
 }
 
-/// 删除保存的 token
+/// 删除保存的 token（连同 OS 钥匙串里的副本）。
 pub fn clear_token(data_root: &Path) {
     let _ = std::fs::remove_file(token_file(data_root));
+    dsh_marina::secure_store::clear();
 }
 
 #[cfg(test)]
@@ -421,19 +370,16 @@ mod tests {
         let release: LatestRelease = serde_json::from_str(json).unwrap();
         assert_eq!(release.tag_name, "v0.1.2");
         assert!(release.body.contains("自动更新"));
-        assert_eq!(release.windows_exe().map(|asset| asset.size), Some(123));
-        assert!(
-            release
-                .windows_exe_sha256()
-                .is_some_and(|asset| asset.name.ends_with(".sha256"))
-        );
+        assert_eq!(release.assets.len(), 2);
+        assert_eq!(release.assets[0].size, 123);
+        assert!(release.assets[1].name.ends_with(".sha256"));
     }
 
     #[test]
     fn a_release_without_assets_is_read_as_empty() {
         let json = r#"{"tag_name":"v0.1.0","html_url":"https://example.com"}"#;
         let release: LatestRelease = serde_json::from_str(json).unwrap();
-        assert!(release.windows_exe().is_none());
+        assert!(release.assets.is_empty());
         assert!(release.body.is_empty());
     }
 }

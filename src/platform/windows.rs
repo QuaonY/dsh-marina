@@ -1,6 +1,7 @@
-//! Windows platform helpers: single-instance guard, tray icon art, auto-start,
-//! shell integration and original-DSH uninstall.
+//! Windows backend: named-mutex single instance, Win32 window management,
+//! registry auto-start and the original DSH NSIS uninstaller.
 
+use super::{APP_TITLE, home_dir};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
@@ -14,7 +15,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-pub const APP_TITLE: &str = "DSH Marina";
 pub const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 pub const RUN_VALUE: &str = "DSH Marina";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -37,7 +37,6 @@ impl Drop for SingleInstance {
 /// Used by `--wait-for` after an in-place update: the new build must not try to
 /// take the single-instance mutex until the build it replaces is really gone.
 /// Returns `true` when the process is no longer running.
-#[cfg(windows)]
 pub fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) -> bool {
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::System::Threading::{
@@ -58,7 +57,8 @@ pub fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) -> bool {
 }
 
 /// `None` means another Marina process already owns the mutex.
-pub fn acquire_single_instance() -> Option<SingleInstance> {
+/// `data_root` is unused on Windows (the mutex name is global).
+pub fn acquire_single_instance(_data_root: &Path) -> Option<SingleInstance> {
     // Debug builds may use a separate lock so a development copy can run
     // next to the installed Marina (used for UI screenshots).
     let name = if cfg!(debug_assertions)
@@ -82,7 +82,7 @@ pub fn acquire_single_instance() -> Option<SingleInstance> {
 }
 
 /// Show and focus an existing Marina window.
-pub fn activate_window(title: &str) -> bool {
+pub fn activate_window(title: &str, _data_root: &Path) -> bool {
     let wide = wide_null(title);
     let Ok(window) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }) else {
         return false;
@@ -212,82 +212,6 @@ pub fn is_auto_start_enabled() -> bool {
     matches!(status, Ok(status) if status.success())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrayIconState {
-    Idle,
-    Running,
-    Crashed,
-}
-
-/// Draw the Marina hexagon tray icon. The badge dot mirrors the tray contract:
-/// green while an instance runs, red after a startup crash.
-pub fn build_anchor_icon(size: u32, state: TrayIconState) -> Vec<u8> {
-    // Load the logo PNG and resize if needed
-    let logo_bytes = include_bytes!("../assets/logo.png");
-    let img = image::load_from_memory(logo_bytes)
-        .map_err(|e| crate::applog::warn(&format!("读取 logo.png 失败：{e}")))
-        .ok()
-        .map(|i| i.resize_exact(size, size, image::imageops::FilterType::Lanczos3))
-        .map(|i| i.to_rgba8());
-
-    let mut rgba = if let Some(buf) = img {
-        buf.into_raw()
-    } else {
-        // Fallback: Create a simple colored square if logo loading fails
-        crate::applog::warn("logo.png 读取失败，改用备用图标");
-        let mut buf = vec![0u8; (size * size * 4) as usize];
-        // Fill with a recognizable color (blue)
-        for i in 0..(size * size) as usize {
-            buf[i * 4] = 70; // R
-            buf[i * 4 + 1] = 130; // G
-            buf[i * 4 + 2] = 180; // B
-            buf[i * 4 + 3] = 255; // A
-        }
-        buf
-    };
-
-    let s = size as f32;
-    let put = |rgba: &mut [u8], x: i32, y: i32, color: (u8, u8, u8)| {
-        if x >= 0 && y >= 0 && (x as u32) < size && (y as u32) < size {
-            let index = ((y as u32 * size + x as u32) * 4) as usize;
-            if index + 3 < rgba.len() {
-                rgba[index] = color.0;
-                rgba[index + 1] = color.1;
-                rgba[index + 2] = color.2;
-                rgba[index + 3] = 255;
-            }
-        }
-    };
-
-    let badge = match state {
-        TrayIconState::Idle => None,
-        TrayIconState::Running => Some((16, 185, 129)),
-        TrayIconState::Crashed => Some((239, 68, 68)),
-    };
-    if let Some(color) = badge {
-        let dot_cx = s * 0.76;
-        let dot_cy = s * 0.78;
-        let dot_r = (s * 0.13).max(2.0);
-        for y in (dot_cy - dot_r - 2.0) as i32..=(dot_cy + dot_r + 2.0) as i32 {
-            for x in (dot_cx - dot_r - 2.0) as i32..=(dot_cx + dot_r + 2.0) as i32 {
-                let distance = ((x as f32 - dot_cx).powi(2) + (y as f32 - dot_cy).powi(2)).sqrt();
-                if distance <= dot_r + 1.5 {
-                    put(&mut rgba, x, y, (255, 255, 255));
-                }
-            }
-        }
-        for y in (dot_cy - dot_r) as i32..=(dot_cy + dot_r) as i32 {
-            for x in (dot_cx - dot_r) as i32..=(dot_cx + dot_r) as i32 {
-                let distance = ((x as f32 - dot_cx).powi(2) + (y as f32 - dot_cy).powi(2)).sqrt();
-                if distance <= dot_r {
-                    put(&mut rgba, x, y, color);
-                }
-            }
-        }
-    }
-    rgba
-}
-
 pub fn open_path(path: &Path) {
     let mut command = Command::new("explorer.exe");
     if path.is_file() {
@@ -299,10 +223,7 @@ pub fn open_path(path: &Path) {
 }
 
 pub fn external_dsh_home() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("C:\\"))
-        .join(".dsh")
+    home_dir().join(".dsh")
 }
 
 pub fn external_data_directory() -> Option<PathBuf> {
@@ -363,10 +284,6 @@ pub fn uninstall_external(executable: &Path, delete_data: bool) -> Result<(), St
     Ok(())
 }
 
-pub fn current_executable() -> Result<PathBuf, String> {
-    std::env::current_exe().map_err(|error| error.to_string())
-}
-
 /// Bytes the current user may still write on the drive holding `path`.
 pub fn free_space(path: &Path) -> Option<u64> {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -380,15 +297,18 @@ pub fn free_space(path: &Path) -> Option<u64> {
     Some(available)
 }
 
-/// Start a fresh Marina that waits for this process to exit (after a data move).
-pub fn spawn_restart() -> Result<(), String> {
-    let executable = current_executable()?;
-    Command::new(executable)
-        .arg("--wait-for")
-        .arg(std::process::id().to_string())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("无法重新启动 Marina：{e}"))
+/// Total physical RAM in bytes (0 if the query fails).
+pub fn total_physical_memory() -> u64 {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GlobalMemoryStatusEx(&mut status) }.is_ok() {
+        status.ullTotalPhys
+    } else {
+        0
+    }
 }
 
 fn wide_null(value: &str) -> Vec<u16> {

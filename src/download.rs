@@ -3,7 +3,7 @@
 //! The official DSH feed is an `electron-updater` generic provider.  Nightly
 //! builds are described by `nightly.yml`; stable builds by `latest.yml`.
 
-use crate::runtimes::{DSH_EXECUTABLE_NAME, RuntimeInfo, RuntimeRegistry, RuntimeSource};
+use crate::runtimes::{RuntimeInfo, RuntimeRegistry, RuntimeSource};
 use base64::Engine;
 use reqwest::header::{CONTENT_LENGTH, RANGE};
 use serde::{Deserialize, Serialize};
@@ -16,10 +16,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
 
+// The official DSH feed is per-platform: Windows publishes `nightly.yml` /
+// `latest.yml` under `win-x64`, macOS `nightly-mac.yml` / `latest-mac.yml`
+// under `mac-arm64` (DSH ships no Intel-mac or Linux desktop build yet).
+#[cfg(windows)]
 pub const OFFICIAL_FEED_URL: &str =
     "https://download.deepseek.com/dsh-desk/feeds/win-x64/nightly.yml";
+#[cfg(windows)]
 pub const OFFICIAL_STABLE_FEED_URL: &str =
     "https://download.deepseek.com/dsh-desk/feeds/win-x64/latest.yml";
+#[cfg(target_os = "macos")]
+pub const OFFICIAL_FEED_URL: &str =
+    "https://download.deepseek.com/dsh-desk/feeds/mac-arm64/nightly-mac.yml";
+#[cfg(target_os = "macos")]
+pub const OFFICIAL_STABLE_FEED_URL: &str =
+    "https://download.deepseek.com/dsh-desk/feeds/mac-arm64/latest-mac.yml";
+
+/// Extension of the platform's DSH installer artifact (NSIS `.exe` on
+/// Windows, `.zip` app bundle on macOS).
+#[cfg(windows)]
+pub const INSTALLER_EXTENSION: &str = "exe";
+#[cfg(not(windows))]
+pub const INSTALLER_EXTENSION: &str = "zip";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -48,6 +66,8 @@ pub enum DownloadError {
     MissingField(&'static str),
     #[error("下载已取消")]
     Cancelled,
+    #[error("下载已暂停")]
+    Paused,
     #[error("下载不完整：收到 {downloaded} / {total} 字节")]
     Incomplete { downloaded: u64, total: u64 },
     #[error("下载失败：{0}")]
@@ -326,7 +346,8 @@ struct FeedDocument {
 }
 
 /// Parse the subset of `electron-updater` metadata Marina needs.  The first
-/// `.exe` entry in `files` wins; top-level `path`/`sha512` are the fallback.
+/// platform-installer entry in `files` wins; top-level `path`/`sha512` are the
+/// fallback.
 pub fn parse_feed(text: &str) -> Result<FeedInfo, DownloadError> {
     let document: FeedDocument = serde_yaml_ng::from_str(text)
         .map_err(|error| DownloadError::InvalidFeed(error.to_string()))?;
@@ -337,10 +358,11 @@ pub fn parse_feed(text: &str) -> Result<FeedInfo, DownloadError> {
     if !crate::runtimes::is_safe_version(version.trim()) {
         return Err(DownloadError::InvalidVersion(version.trim().to_owned()));
     }
+    let suffix = format!(".{INSTALLER_EXTENSION}");
     let file = document.files.iter().find(|file| {
         file.url
             .as_deref()
-            .is_some_and(|url| url.to_ascii_lowercase().ends_with(".exe"))
+            .is_some_and(|url| url.to_ascii_lowercase().ends_with(&suffix))
     });
     let url = file
         .and_then(|file| file.url.clone())
@@ -375,6 +397,7 @@ pub fn download_with_resume(
     url: &str,
     destination: &Path,
     cancel: &AtomicBool,
+    pause: &AtomicBool,
     progress: &mut dyn FnMut(DownloadProgress),
 ) -> Result<(), DownloadError> {
     let partial = destination.with_extension(format!(
@@ -435,7 +458,16 @@ pub fn download_with_resume(
         let mut downloaded = downloaded_before;
         progress(DownloadProgress { downloaded, total });
         loop {
+            if pause.load(Ordering::Relaxed) {
+                // Pause keeps the `.part` so a later resume continues from it.
+                drop(file);
+                return Err(DownloadError::Paused);
+            }
             if cancel.load(Ordering::Relaxed) {
+                // Cancel means "start over": drop the partial so nothing
+                // half-downloaded is left behind or offered for resume.
+                drop(file);
+                let _ = fs::remove_file(&partial);
                 return Err(DownloadError::Cancelled);
             }
             let read = reader.read(&mut buffer)?;
@@ -486,6 +518,7 @@ pub fn verify_sha512(path: &Path, expected_base64: &str) -> Result<(), DownloadE
 /// user's DSH is running.  The application files are a 7z archive appended
 /// to the installer; Windows' own `tar.exe` (libarchive, Windows 10 1803+)
 /// unpacks it.  The installer is never run, so the user's DSH stays as it is.
+#[cfg(windows)]
 pub fn install_nsis(installer: &Path, target: &Path) -> Result<(), DownloadError> {
     // `extract_nsis_payload` removes an existing `target`: never let a
     // version string that climbed out of `runtimes/` get this far.
@@ -502,9 +535,11 @@ pub fn install_nsis(installer: &Path, target: &Path) -> Result<(), DownloadError
     extract_nsis_payload(installer, target).map_err(DownloadError::InstallerFailed)
 }
 
+#[cfg(windows)]
 const SEVEN_ZIP_SIGNATURE: [u8; 6] = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C];
 
 /// Offset of the first 7z archive inside `file`.
+#[cfg(windows)]
 pub fn find_7z_payload(file: &Path) -> std::io::Result<Option<u64>> {
     let mut reader = File::open(file)?;
     let mut buffer = vec![0u8; 4 * 1024 * 1024];
@@ -529,6 +564,7 @@ pub fn find_7z_payload(file: &Path) -> std::io::Result<Option<u64>> {
     }
 }
 
+#[cfg(windows)]
 fn extract_nsis_payload(installer: &Path, target: &Path) -> Result<(), String> {
     let offset = find_7z_payload(installer)
         .map_err(|e| e.to_string())?
@@ -572,7 +608,9 @@ fn extract_nsis_payload(installer: &Path, target: &Path) -> Result<(), String> {
             stderr.lines().last().unwrap_or_default()
         ));
     }
-    if !unpacked.join(DSH_EXECUTABLE_NAME).is_file()
+    if !unpacked
+        .join(crate::runtimes::DSH_EXECUTABLE_NAME)
+        .is_file()
         || !unpacked.join("resources").join("app.asar").is_file()
     {
         return Err("解出来的文件不完整".to_owned());
@@ -583,6 +621,78 @@ fn extract_nsis_payload(installer: &Path, target: &Path) -> Result<(), String> {
     }
     fs::rename(&unpacked, target).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Install a DSH runtime from the macOS `.zip` app bundle into `target`.
+///
+/// `ditto -x -k` is used rather than a Rust zip library because it preserves
+/// the symlinks, permissions and bundle layout an Electron `.app` needs
+/// (e.g. `Frameworks/Versions/Current`).  The archive is extracted directly,
+/// never opened by LaunchServices, so no Gatekeeper quarantine is involved.
+#[cfg(target_os = "macos")]
+pub fn install_mac_zip(archive: &Path, target: &Path) -> Result<(), DownloadError> {
+    if target.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(DownloadError::InstallerFailed(
+            "安装目标路径不合法".to_owned(),
+        ));
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| DownloadError::InstallerFailed("目标目录无效".to_owned()))?;
+    fs::create_dir_all(parent)?;
+    let work = tempfile::Builder::new()
+        .prefix(".extract-")
+        .tempdir_in(parent)?;
+    let unpacked = work.path().join("app");
+    fs::create_dir_all(&unpacked)?;
+    let output = Command::new("ditto")
+        .arg("-x")
+        .arg("-k")
+        .arg(archive)
+        .arg(&unpacked)
+        .output()
+        .map_err(|e| DownloadError::InstallerFailed(format!("无法运行 ditto：{e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DownloadError::InstallerFailed(format!(
+            "ditto 解包失败：{}",
+            stderr.lines().last().unwrap_or_default()
+        )));
+    }
+    if !crate::runtimes::runtime_executable(&unpacked).is_file() {
+        return Err(DownloadError::InstallerFailed(
+            "解出来的文件不完整".to_owned(),
+        ));
+    }
+    if target.exists() {
+        fs::remove_dir_all(target)?;
+    }
+    fs::rename(&unpacked, target)?;
+    Ok(())
+}
+
+/// Extract a downloaded DSH installer into `target` using the platform tool.
+pub fn install_payload(installer: &Path, target: &Path) -> Result<(), DownloadError> {
+    #[cfg(windows)]
+    {
+        install_nsis(installer, target)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        install_mac_zip(installer, target)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (installer, target);
+        Err(DownloadError::InstallerFailed(
+            "当前平台不支持安装 DSH 运行时".to_owned(),
+        ))
+    }
 }
 
 /// Installer files placed directly in `runtimes/` for offline installation
@@ -599,7 +709,7 @@ pub fn offline_installers(registry: &RuntimeRegistry) -> Vec<PathBuf> {
             path.is_file()
                 && path
                     .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case(INSTALLER_EXTENSION))
         })
         .collect::<Vec<_>>();
     installers.sort();
@@ -619,8 +729,8 @@ pub fn install_offline(
         chrono::Utc::now().format("%Y%m%d%H%M%S%3f")
     ));
     let result = (|| {
-        install_nsis(installer, &staging)?;
-        let executable = staging.join(DSH_EXECUTABLE_NAME);
+        install_payload(installer, &staging)?;
+        let executable = crate::runtimes::runtime_executable(&staging);
         let version = crate::runtimes::read_dsh_version(&executable)
             .ok_or(DownloadError::MissingField("version"))?;
         if !crate::runtimes::is_safe_version(&version) {
@@ -710,10 +820,20 @@ fn short_error(error: &DownloadError) -> String {
 
 /// Installer of `version` on the official CDN.
 pub fn official_installer_url(version: &str) -> String {
-    format!("{OFFICIAL_BIN_BASE}deepseek-harness-{version}-win-x64.exe")
+    #[cfg(windows)]
+    {
+        format!("{OFFICIAL_BIN_BASE}deepseek-harness-{version}-win-x64.exe")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        format!("{OFFICIAL_BIN_BASE}deepseek-harness-{version}-mac-arm64.zip")
+    }
 }
 
+#[cfg(windows)]
 pub const OFFICIAL_BIN_BASE: &str = "https://download.deepseek.com/dsh-desk/bin/win-x64/";
+#[cfg(target_os = "macos")]
+pub const OFFICIAL_BIN_BASE: &str = "https://download.deepseek.com/dsh-desk/bin/mac-arm64/";
 
 static LAST_LIST_NOTE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
@@ -889,6 +1009,7 @@ pub fn download_and_install(
     feed: &FeedInfo,
     registry: &RuntimeRegistry,
     cancel: &AtomicBool,
+    pause: &AtomicBool,
     progress: &mut dyn FnMut(DownloadProgress),
 ) -> Result<RuntimeInfo, DownloadError> {
     if !crate::runtimes::is_safe_version(&feed.version) {
@@ -899,9 +1020,9 @@ pub fn download_and_install(
     }
     let download_dir = registry.download_dir();
     fs::create_dir_all(&download_dir)?;
-    let installer = download_dir.join(format!("dsh-{}.exe", feed.version));
+    let installer = download_dir.join(format!("dsh-{}.{}", feed.version, INSTALLER_EXTENSION));
     if !installer.is_file() {
-        download_with_resume(&feed.url, &installer, cancel, progress)?;
+        download_with_resume(&feed.url, &installer, cancel, pause, progress)?;
     }
     // Versions listed from GitHub have no published checksum; the complete
     // HTTPS download from the official server is all there is to check.
@@ -909,9 +1030,9 @@ pub fn download_and_install(
         verify_sha512(&installer, &feed.sha512)?;
     }
     let target = registry.runtimes_dir().join(&feed.version);
-    install_nsis(&installer, &target)?;
+    install_payload(&installer, &target)?;
     registry.mark_installed(&feed.version)?;
-    let executable = target.join(DSH_EXECUTABLE_NAME);
+    let executable = crate::runtimes::runtime_executable(&target);
     Ok(RuntimeInfo {
         id: feed.version.clone(),
         version: feed.version.clone(),
@@ -927,6 +1048,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
     fn finds_the_7z_payload_offset() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("setup.exe");
@@ -943,12 +1065,15 @@ mod tests {
     /// `cargo test -- --ignored live_extract`.
     #[test]
     #[ignore]
+    #[cfg(windows)]
     fn live_extracts_a_real_installer() {
         let installer = PathBuf::from(std::env::var("DSH_TEST_INSTALLER").unwrap());
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("runtime");
         install_nsis(&installer, &target).unwrap();
-        let version = crate::runtimes::read_dsh_version(&target.join(DSH_EXECUTABLE_NAME)).unwrap();
+        let version =
+            crate::runtimes::read_dsh_version(&crate::runtimes::runtime_executable(&target))
+                .unwrap();
         println!("extracted DSH {version}");
     }
 
@@ -1004,9 +1129,15 @@ mod tests {
         assert_eq!(versions.len(), 3);
         assert_eq!(versions[2].version, "0.2.8");
         assert!(versions[2].feed_url.is_empty());
+        #[cfg(windows)]
         assert_eq!(
             official_installer_url("0.2.8"),
             "https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-0.2.8-win-x64.exe"
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            official_installer_url("0.2.8"),
+            "https://download.deepseek.com/dsh-desk/bin/mac-arm64/deepseek-harness-0.2.8-mac-arm64.zip"
         );
         assert_eq!(versions[0].version, "0.3.0");
         assert!(!versions[0].prerelease);
@@ -1023,14 +1154,19 @@ mod tests {
         assert!(offline_installers(&registry).is_empty());
         let runtimes = registry.runtimes_dir();
         fs::create_dir_all(runtimes.join("0.2.0")).unwrap();
-        fs::write(runtimes.join("deepseek-harness-0.2.1-win-x64.EXE"), b"x").unwrap();
+        let installer_name = format!(
+            "deepseek-harness-0.2.1.{}",
+            INSTALLER_EXTENSION.to_uppercase()
+        );
+        fs::write(runtimes.join(&installer_name), b"x").unwrap();
         fs::write(runtimes.join("notes.txt"), b"x").unwrap();
         let found = offline_installers(&registry);
         assert_eq!(found.len(), 1);
-        assert!(found[0].ends_with("deepseek-harness-0.2.1-win-x64.EXE"));
+        assert!(found[0].ends_with(&installer_name));
     }
 
     #[test]
+    #[cfg(windows)]
     fn parses_official_nightly_feed() {
         let feed = parse_feed(
             r#"
@@ -1057,6 +1193,32 @@ releaseDate: '2026-10-29T14:04:01.198Z'
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn parses_official_nightly_feed_mac() {
+        let feed = parse_feed(
+            r#"
+version: 0.2.2-rc.3
+files:
+  - url: >-
+      https://download.deepseek.com/dsh-desk/bin/mac-arm64/deepseek-harness-0.2.2-rc.3-mac-arm64.zip
+    sha512: >-
+      UThWXKCqiiUnjFgij655+Gc1MgiSl+Ybl71jkQi48BhcBCN0XSDNT4GGmGJY3nvEqnkLT3LtWbL6wy6t/kRxIw==
+    size: 362840431
+path: >-
+  https://download.deepseek.com/dsh-desk/bin/mac-arm64/deepseek-harness-0.2.2-rc.3-mac-arm64.zip
+sha512: >-
+  UThWXKCqiiUnjFgij655+Gc1MgiSl+Ybl71jkQi48BhcBCN0XSDNT4GGmGJY3nvEqnkLT3LtWbL6wy6t/kRxIw==
+releaseDate: '2026-11-13T00:00:00.000Z'
+"#,
+        )
+        .unwrap();
+        assert_eq!(feed.version, "0.2.2-rc.3");
+        assert_eq!(feed.size, 362840431);
+        assert!(feed.url.ends_with(".zip"));
+        assert!(feed.sha512.ends_with("=="));
+    }
+
+    #[test]
     fn reports_missing_feed_fields() {
         assert!(matches!(
             parse_feed("version: 1.0.0\n"),
@@ -1065,6 +1227,7 @@ releaseDate: '2026-10-29T14:04:01.198Z'
     }
 
     #[test]
+    #[cfg(windows)]
     fn parses_relative_electron_builder_feed_and_resolves_installer_url() {
         let feed = parse_feed(
             "version: 0.3.0\nfiles:\n  - url: DeepSeek-Harness-Setup-0.3.0.exe\n    sha512: abc==\n    size: 42\n\
@@ -1081,6 +1244,27 @@ releaseDate: '2026-10-29T14:04:01.198Z'
                 &options
             ),
             "https://example.invalid/feeds/win-x64/DeepSeek-Harness-Setup-0.3.0.exe"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn parses_relative_feed_and_resolves_installer_url_mac() {
+        let feed = parse_feed(
+            "version: 0.3.0\nfiles:\n  - url: deepseek-harness-0.3.0-mac-arm64.zip\n    sha512: abc==\n    size: 42\n\
+             path: deepseek-harness-0.3.0-mac-arm64.zip\nsha512: abc==\nreleaseDate: '2026-11-01T00:00:00.000Z'\n",
+        )
+        .unwrap();
+        assert_eq!(feed.url, "deepseek-harness-0.3.0-mac-arm64.zip");
+        let options = FeedOptions::default();
+        assert_eq!(
+            resolve_installer_url(
+                "https://example.invalid/feeds/mac-arm64/latest-mac.yml",
+                &feed.url,
+                DownloadSource::Custom,
+                &options
+            ),
+            "https://example.invalid/feeds/mac-arm64/deepseek-harness-0.3.0-mac-arm64.zip"
         );
     }
 

@@ -1,12 +1,130 @@
 //! Main window rendering and shared widget helpers.
 
+/// Resolve a color token against the active (light/dark) theme.  Defined
+/// before the submodules so it is in scope throughout the whole `ui` tree.
+macro_rules! t {
+    (BG) => {
+        $crate::ui::theme().bg
+    };
+    (BG_CARD) => {
+        $crate::ui::theme().bg_card
+    };
+    (BG_ELEVATED) => {
+        $crate::ui::theme().bg_elevated
+    };
+    (BORDER_SUBTLE) => {
+        $crate::ui::theme().border_subtle
+    };
+    (BORDER) => {
+        $crate::ui::theme().border
+    };
+    (PRIMARY) => {
+        $crate::ui::theme().primary
+    };
+    (PRIMARY_HOVER) => {
+        $crate::ui::theme().primary_hover
+    };
+    (PRIMARY_MUTED) => {
+        $crate::ui::theme().primary_muted
+    };
+    (BG_HOVER) => {
+        $crate::ui::theme().bg_hover
+    };
+    (BG_ROW_HOVER) => {
+        $crate::ui::theme().bg_row_hover
+    };
+    (BORDER_HOVER) => {
+        $crate::ui::theme().border_hover
+    };
+    (ACCENT) => {
+        $crate::ui::theme().accent
+    };
+    (SUCCESS) => {
+        $crate::ui::theme().success
+    };
+    (DANGER) => {
+        $crate::ui::theme().danger
+    };
+    (TEXT) => {
+        $crate::ui::theme().text
+    };
+    (TEXT_2) => {
+        $crate::ui::theme().text_2
+    };
+    (TEXT_3) => {
+        $crate::ui::theme().text_3
+    };
+    (STOPPED) => {
+        $crate::ui::theme().stopped
+    };
+    (INFO) => {
+        $crate::ui::theme().info
+    };
+    (WARNING_TEXT) => {
+        $crate::ui::theme().warning_text
+    };
+    (ERROR_BG) => {
+        $crate::ui::theme().error_bg
+    };
+    (ERROR_BORDER) => {
+        $crate::ui::theme().error_border
+    };
+    (SUCCESS_BG) => {
+        $crate::ui::theme().success_bg
+    };
+    (SUCCESS_BORDER) => {
+        $crate::ui::theme().success_border
+    };
+    (PRIMARY_TINT_08) => {
+        $crate::ui::theme().primary_tint_08
+    };
+    (PRIMARY_TINT_25) => {
+        $crate::ui::theme().primary_tint_25
+    };
+    (DANGER_TINT_08) => {
+        $crate::ui::theme().danger_tint_08
+    };
+    (DANGER_TINT_15) => {
+        $crate::ui::theme().danger_tint_15
+    };
+    (DANGER_TINT_20) => {
+        $crate::ui::theme().danger_tint_20
+    };
+    (DANGER_TINT_25) => {
+        $crate::ui::theme().danger_tint_25
+    };
+    (SUCCESS_TINT_08) => {
+        $crate::ui::theme().success_tint_08
+    };
+    (SUCCESS_TINT_24) => {
+        $crate::ui::theme().success_tint_24
+    };
+    (ERROR_BORDER_SOFT) => {
+        $crate::ui::theme().error_border_soft
+    };
+    (LOG_BG) => {
+        $crate::ui::theme().log_bg
+    };
+    (LOG_TEXT) => {
+        $crate::ui::theme().log_text
+    };
+    (TEXT_ON_PRIMARY) => {
+        $crate::ui::theme().text_on_primary
+    };
+    (OVERLAY) => {
+        $crate::ui::theme().overlay
+    };
+}
+
 mod dialogs;
 mod market;
 mod packs;
 mod settings;
 mod tabs;
+mod theme;
 
 pub(crate) use settings::THIRD_PARTY_LICENSES;
+pub(crate) use theme::{DARK, LIGHT, Theme};
 
 use super::*;
 use dsh_marina::history::LaunchRecord;
@@ -15,52 +133,61 @@ use dsh_marina::instances::{AgentsHomeMode, InstancePaths, OriginKind};
 use dsh_marina::plugins::PluginInfo;
 use dsh_marina::snapshots::SnapshotInfo;
 
-// Light theme tokens shared by every screen.
-const BG: u32 = 0xfafbfc;
-const BG_CARD: u32 = 0xffffff;
-const BG_ELEVATED: u32 = 0xf8f9fa;
-const BORDER_SUBTLE: u32 = 0xe8ecf0;
-const BORDER: u32 = 0xd4dae0;
-const PRIMARY: u32 = 0x0d6efd;
-const PRIMARY_HOVER: u32 = 0x0a58ca;
-const PRIMARY_MUTED: u32 = 0xe7f1ff;
-const BG_HOVER: u32 = 0xdfeaf8;
-const BG_ROW_HOVER: u32 = 0xf4f7fb;
-const BORDER_HOVER: u32 = 0x9db1c7;
-const ACCENT: u32 = 0xf59e0b;
-const SUCCESS: u32 = 0x10b981;
-const DANGER: u32 = 0xef4444;
-const TEXT: u32 = 0x1a1f2e;
-const TEXT_2: u32 = 0x4b5563;
-const TEXT_3: u32 = 0x9ca3af;
-const STOPPED: u32 = 0x64748b;
-const INFO: u32 = 0x60a5fa;
-const WARNING_TEXT: u32 = 0xb45309;
-const ERROR_BG: u32 = 0xfef2f2;
-const ERROR_BORDER: u32 = 0xfecaca;
-const SUCCESS_BG: u32 = 0xf0fdf4;
-const SUCCESS_BORDER: u32 = 0xbbf7d0;
-const PRIMARY_TINT_08: u32 = 0x3b9eff14;
-const PRIMARY_TINT_25: u32 = 0x3b9eff40;
-const DANGER_TINT_08: u32 = 0xf8717114;
-const DANGER_TINT_15: u32 = 0xf8717126;
-const DANGER_TINT_20: u32 = 0xf8717133;
-const DANGER_TINT_25: u32 = 0xf8717140;
-const SUCCESS_TINT_08: u32 = 0x10b98114;
-const SUCCESS_TINT_24: u32 = 0x10b9813d;
-const ERROR_BORDER_SOFT: u32 = 0xfca5a5;
-const LOG_BG: u32 = 0x0a0e14;
-const LOG_TEXT: u32 = 0x9ca9ba;
-const TEXT_ON_PRIMARY: u32 = 0xffffff;
-const OVERLAY: u32 = 0x0a0e1473;
+// ---- Color theme --------------------------------------------------------
+//
+// Every screen reads colors through the `t!` macro above, which resolves a
+// token against the active theme.  Light is the default; the user can switch
+// to dark in Settings (persisted as `ui.dark_mode` in marina.toml).  All dark
+// text colors are chosen for >= 4.5:1 contrast on their backgrounds.
+
+static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Select the active theme; called at startup and whenever the setting changes.
+pub(crate) fn set_dark_mode(dark: bool) {
+    DARK_MODE.store(dark, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The theme every `t!` token resolves against.
+pub(crate) fn theme() -> &'static Theme {
+    if DARK_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
 
 const TITLEBAR_HEIGHT: f32 = 56.;
+
+// 4px-based spacing scale and three radius tiers (card / control / badge),
+// shared by the widget helpers so every screen keeps the same rhythm.
+const SP_1: f32 = 4.;
+const SP_2: f32 = 8.;
+const SP_3: f32 = 12.;
+const SP_4: f32 = 16.;
+const SP_5: f32 = 20.;
+const R_CARD: f32 = 14.;
+const R_CTRL: f32 = 10.;
+const R_BADGE: f32 = 8.;
+
+// 字体按平台选择：Windows 专属字体在 macOS 上不存在会静默回退，导致中文与
+// 等宽日志渲染走样，因此双端分别指定系统自带字体。
+#[cfg(windows)]
 const FONT: &str = "Microsoft YaHei UI";
+#[cfg(target_os = "macos")]
+const FONT: &str = "PingFang SC";
+#[cfg(not(any(windows, target_os = "macos")))]
+const FONT: &str = "sans-serif";
+
+#[cfg(windows)]
 const MONO: &str = "Consolas";
+#[cfg(target_os = "macos")]
+const MONO: &str = "Menlo";
+#[cfg(not(any(windows, target_os = "macos")))]
+const MONO: &str = "monospace";
 
 /// 卡片徽标与头像的备选色，按名称稳定取一个。
 const PALETTE: [u32; 8] = [
-    0x0d6efd, 0x10b981, 0xf59e0b, 0x8b5cf6, 0xef4444, 0x06b6d4, 0xec4899, 0x64748b,
+    0x5e6ad2, 0x1f9d6b, 0xd9930f, 0x8b5cf6, 0xd64550, 0x06b6d4, 0xec4899, 0x8b94a3,
 ];
 
 fn palette_color(seed: &str) -> u32 {
@@ -76,7 +203,7 @@ fn hex_color(color: &str) -> u32 {
         .strip_prefix('#')
         .filter(|hex| hex.len() == 6)
         .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-        .unwrap_or(PRIMARY)
+        .unwrap_or(t!(PRIMARY))
 }
 
 /// Plain text tooltip shown while hovering an element.
@@ -89,13 +216,67 @@ impl Render for TextTooltip {
             .px(px(10.))
             .py(px(6.))
             .rounded(px(8.))
-            .bg(rgb(BG_CARD))
+            .bg(rgb(t!(BG_CARD)))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(t!(BORDER)))
             .text_size(px(12.))
-            .text_color(rgb(TEXT_2))
+            .text_color(rgb(t!(TEXT_2)))
             .child(self.0.clone())
     }
+}
+
+/// Animated brand loading mark: a rotating Marina ring plus an indeterminate
+/// progress bar, so a slow fetch reads as "working" rather than "stuck".
+/// `id` keeps the animation element ids unique per call site.
+pub(crate) fn loading_block(label: &str, id: &str) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(12.))
+        .py(px(48.))
+        .child(
+            svg()
+                .path("icons/loader-marina.svg")
+                .size(px(34.))
+                .text_color(rgb(t!(PRIMARY)))
+                .with_animation(
+                    gpui::ElementId::Name(format!("{id}-spin").into()),
+                    gpui::Animation::new(std::time::Duration::from_secs_f32(0.9)).repeat(),
+                    |el, delta| {
+                        el.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(t!(TEXT_2)))
+                .child(label.to_owned()),
+        )
+        .child(
+            div()
+                .relative()
+                .w(px(160.))
+                .h(px(3.))
+                .rounded(px(2.))
+                .bg(rgb(t!(BG_ELEVATED)))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(px(48.))
+                        .rounded(px(2.))
+                        .bg(rgb(t!(PRIMARY)))
+                        .with_animation(
+                            gpui::ElementId::Name(format!("{id}-bar").into()),
+                            gpui::Animation::new(std::time::Duration::from_secs_f32(1.2)).repeat(),
+                            |el, delta| el.relative().left(px(-48. + (160. + 48.) * delta)),
+                        ),
+                ),
+        )
 }
 
 fn is_running(status: &InstanceStatus) -> bool {
@@ -122,10 +303,10 @@ fn status_label(status: &InstanceStatus) -> &'static str {
 
 fn status_color(status: &InstanceStatus) -> u32 {
     match status {
-        InstanceStatus::Running | InstanceStatus::AdoptedRunning => SUCCESS,
-        InstanceStatus::Starting | InstanceStatus::Stopping => ACCENT,
-        InstanceStatus::Crashed => DANGER,
-        InstanceStatus::Stopped => STOPPED,
+        InstanceStatus::Running | InstanceStatus::AdoptedRunning => t!(SUCCESS),
+        InstanceStatus::Starting | InstanceStatus::Stopping => t!(ACCENT),
+        InstanceStatus::Crashed => t!(DANGER),
+        InstanceStatus::Stopped => t!(STOPPED),
     }
 }
 
@@ -238,33 +419,36 @@ fn btn(label: impl Into<SharedString>, tone: Tone, small: bool) -> Hoverable {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .gap(px(8.))
-        .px(px(if small { 14. } else { 18. }))
-        .py(px(if small { 7. } else { 9. }))
-        .rounded(px(9.))
+        .gap(px(SP_2))
+        .px(px(if small { SP_3 } else { SP_4 }))
+        .py(px(if small { 6. } else { SP_2 }))
+        .rounded(px(R_CTRL))
         .border_1()
         .text_size(px(if small { 12. } else { 13. }))
         .font_weight(FontWeight::SEMIBOLD)
         .child(tr(&label.into()));
     match tone {
         Tone::Default => Hoverable::new(
-            el.bg(rgb(BG_CARD))
-                .border_color(rgb(BORDER))
-                .text_color(rgb(TEXT)),
-            |s| s.bg(rgb(BG_HOVER)).border_color(rgb(BORDER_HOVER)),
+            el.bg(rgb(t!(BG_CARD)))
+                .border_color(rgb(t!(BORDER)))
+                .text_color(rgb(t!(TEXT))),
+            |s| s.bg(rgb(t!(BG_HOVER))).border_color(rgb(t!(BORDER_HOVER))),
         ),
         Tone::Primary => Hoverable::new(
-            el.bg(rgb(PRIMARY))
-                .border_color(rgb(PRIMARY))
-                .text_color(white())
+            el.bg(rgb(t!(PRIMARY)))
+                .border_color(rgb(t!(PRIMARY)))
+                .text_color(rgb(t!(TEXT_ON_PRIMARY)))
                 .font_weight(FontWeight::BOLD),
-            |s| s.bg(rgb(PRIMARY_HOVER)).border_color(rgb(PRIMARY_HOVER)),
+            |s| {
+                s.bg(rgb(t!(PRIMARY_HOVER)))
+                    .border_color(rgb(t!(PRIMARY_HOVER)))
+            },
         ),
         Tone::Danger => Hoverable::new(
-            el.bg(rgb(BG_CARD))
-                .border_color(rgba(0xf871714d))
-                .text_color(rgb(DANGER)),
-            |s| s.bg(rgba(0xef444414)).border_color(rgb(DANGER)),
+            el.bg(rgb(t!(BG_CARD)))
+                .border_color(rgba(t!(DANGER_TINT_25)))
+                .text_color(rgb(t!(DANGER))),
+            |s| s.bg(rgba(t!(DANGER_TINT_08))).border_color(rgb(t!(DANGER))),
         ),
     }
 }
@@ -282,13 +466,13 @@ fn caption_button(area: WindowControlArea, danger: bool, icon: Div) -> Div {
         .justify_center()
         .w(px(46.))
         .h_full()
-        .text_color(rgb(TEXT_2))
+        .text_color(rgb(t!(TEXT_2)))
         .window_control_area(area)
         .hover(move |s| {
             if danger {
-                s.bg(rgb(0xe81123)).text_color(rgb(BG_CARD))
+                s.bg(rgb(0xe81123)).text_color(white())
             } else {
-                s.bg(rgb(BG_HOVER)).text_color(rgb(TEXT))
+                s.bg(rgb(t!(BG_HOVER))).text_color(rgb(t!(TEXT)))
             }
         })
         .child(icon)
@@ -303,8 +487,8 @@ fn switch(on: bool) -> Div {
         .h(px(24.))
         .rounded(px(13.))
         .border_1()
-        .border_color(rgb(if on { PRIMARY } else { BORDER }))
-        .bg(rgb(if on { PRIMARY } else { BG_ELEVATED }))
+        .border_color(rgb(if on { t!(PRIMARY) } else { t!(BORDER) }))
+        .bg(rgb(if on { t!(PRIMARY) } else { t!(BG_ELEVATED) }))
         .child(
             div()
                 .absolute()
@@ -312,7 +496,11 @@ fn switch(on: bool) -> Div {
                 .left(px(if on { 20. } else { 2. }))
                 .size(px(18.))
                 .rounded_full()
-                .bg(if on { rgb(BG_CARD) } else { rgb(TEXT_3) }),
+                .bg(if on {
+                    rgb(t!(BG_CARD))
+                } else {
+                    rgb(t!(TEXT_3))
+                }),
         )
 }
 
@@ -327,11 +515,11 @@ enum ChipTone {
 
 fn chip(label: impl Into<SharedString>, tone: ChipTone) -> Div {
     let (bg, fg, border) = match tone {
-        ChipTone::Warn => (0xffc24726, ACCENT, 0xffc2474d),
-        ChipTone::Bad => (0xf8717126, DANGER, 0xf871714d),
-        ChipTone::Off => (0x64748b26, 0x94a3b8, 0x64748b4d),
-        ChipTone::Good => (0x4ade8026, SUCCESS, 0x4ade804d),
-        ChipTone::Info => (0xe7f1ffff, PRIMARY, 0x3b9eff4d),
+        ChipTone::Warn => (0xffc24726, t!(ACCENT), 0xffc2474d),
+        ChipTone::Bad => (0xf8717126, t!(DANGER), 0xf871714d),
+        ChipTone::Off => (0x64748b26, t!(STOPPED), 0x64748b4d),
+        ChipTone::Good => (0x4ade8026, t!(SUCCESS), 0x4ade804d),
+        ChipTone::Info => (t!(PRIMARY_TINT_08), t!(PRIMARY), t!(PRIMARY_TINT_25)),
     };
     div()
         .flex_shrink_0()
@@ -350,11 +538,11 @@ fn chip(label: impl Into<SharedString>, tone: ChipTone) -> Div {
 fn status_pill(status: &InstanceStatus) -> Div {
     let (bg, fg, border) = match status {
         InstanceStatus::Running | InstanceStatus::AdoptedRunning => {
-            (0x10b9811f, SUCCESS, 0x10b98140)
+            (0x10b9811f, t!(SUCCESS), 0x10b98140)
         }
-        InstanceStatus::Starting | InstanceStatus::Stopping => (0xffc24726, ACCENT, 0xffc2474d),
-        InstanceStatus::Crashed => (0xef44441f, DANGER, 0xef444440),
-        InstanceStatus::Stopped => (0x64748b26, 0x94a3b8, 0x64748b4d),
+        InstanceStatus::Starting | InstanceStatus::Stopping => (0xffc24726, t!(ACCENT), 0xffc2474d),
+        InstanceStatus::Crashed => (0xef44441f, t!(DANGER), 0xef444440),
+        InstanceStatus::Stopped => (0x64748b26, t!(STOPPED), 0x64748b4d),
     };
     div()
         .flex_shrink_0()
@@ -370,6 +558,30 @@ fn status_pill(status: &InstanceStatus) -> Div {
         .child(status_label(status))
 }
 
+/// Small solid dot conveying instance status at a glance.
+fn status_dot(status: &InstanceStatus) -> Div {
+    div()
+        .flex_shrink_0()
+        .size(px(8.))
+        .rounded_full()
+        .bg(rgb(status_color(status)))
+}
+
+/// Tiny bar sparkline of recent memory samples (newest last).
+fn sparkline(samples: &[u64], color: u32) -> Div {
+    let max = samples.iter().copied().max().unwrap_or(0).max(1);
+    div()
+        .flex()
+        .items_end()
+        .gap(px(1.))
+        .h(px(16.))
+        .flex_shrink_0()
+        .children(samples.iter().map(|v| {
+            let h = ((*v as f32 / max as f32) * 16.).max(2.);
+            div().w(px(2.)).h(px(h)).rounded(px(1.)).bg(rgb(color))
+        }))
+}
+
 /// The instance's icon, or the first letter of its name.
 fn badge_text(instance: &InstanceConfig) -> String {
     if instance.icon.is_empty() {
@@ -381,7 +593,7 @@ fn badge_text(instance: &InstanceConfig) -> String {
 
 /// Badge colors offered in the appearance dialog (design palette).
 const BADGE_COLORS: [&str; 8] = [
-    "#0d6efd", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#64748b",
+    "#5e6ad2", "#1f9d6b", "#d9930f", "#d64550", "#8b5cf6", "#ec4899", "#14b8a6", "#8b94a3",
 ];
 
 /// Colored square with the instance's icon or initial.
@@ -425,10 +637,10 @@ fn card() -> Div {
     div()
         .flex()
         .flex_col()
-        .bg(rgb(BG_CARD))
+        .bg(rgb(t!(BG_CARD)))
         .border_1()
-        .border_color(rgb(BORDER_SUBTLE))
-        .rounded(px(12.))
+        .border_color(rgb(t!(BORDER_SUBTLE)))
+        .rounded(px(R_CARD))
         .overflow_hidden()
 }
 
@@ -437,11 +649,11 @@ fn card_head(title: &str, right: impl IntoElement) -> Div {
         .flex()
         .items_center()
         .justify_between()
-        .gap(px(12.))
-        .px(px(20.))
-        .py(px(15.))
+        .gap(px(SP_3))
+        .px(px(SP_5))
+        .py(px(SP_4))
         .border_b_1()
-        .border_color(rgb(BORDER_SUBTLE))
+        .border_color(rgb(t!(BORDER_SUBTLE)))
         .child(
             div()
                 .font_weight(FontWeight::BOLD)
@@ -454,7 +666,7 @@ fn card_head(title: &str, right: impl IntoElement) -> Div {
 fn hint(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(12.))
-        .text_color(rgb(TEXT_3))
+        .text_color(rgb(t!(TEXT_3)))
         .child(text.into())
 }
 
@@ -462,11 +674,11 @@ fn row_item(first: bool) -> Div {
     div()
         .flex()
         .items_center()
-        .gap(px(14.))
-        .px(px(20.))
-        .py(px(13.))
+        .gap(px(SP_3))
+        .px(px(SP_5))
+        .py(px(SP_3))
         .when(!first, |el| {
-            el.border_t_1().border_color(rgb(BORDER_SUBTLE))
+            el.border_t_1().border_color(rgb(t!(BORDER_SUBTLE)))
         })
 }
 
@@ -474,11 +686,11 @@ fn form_row(first: bool, title: &str, desc: &str, control: impl IntoElement) -> 
     div()
         .flex()
         .items_center()
-        .gap(px(20.))
-        .px(px(20.))
-        .py(px(16.))
+        .gap(px(SP_5))
+        .px(px(SP_5))
+        .py(px(SP_4))
         .when(!first, |el| {
-            el.border_t_1().border_color(rgb(BORDER_SUBTLE))
+            el.border_t_1().border_color(rgb(t!(BORDER_SUBTLE)))
         })
         .child(
             div()
@@ -486,7 +698,7 @@ fn form_row(first: bool, title: &str, desc: &str, control: impl IntoElement) -> 
                 .flex_col()
                 .flex_1()
                 .min_w(px(0.))
-                .gap(px(3.))
+                .gap(px(SP_1))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(tr(title)))
                 .child(hint(tr(desc))),
         )
@@ -496,40 +708,42 @@ fn form_row(first: bool, title: &str, desc: &str, control: impl IntoElement) -> 
 fn path_box(path: &Path) -> Div {
     div()
         .max_w(px(420.))
-        .px(px(11.))
+        .px(px(SP_3))
         .py(px(6.))
-        .rounded(px(8.))
+        .rounded(px(R_CTRL))
         .border_1()
-        .border_color(rgb(BORDER_SUBTLE))
-        .bg(rgb(BG_ELEVATED))
+        .border_color(rgb(t!(BORDER_SUBTLE)))
+        .bg(rgb(t!(BG_ELEVATED)))
         .font_family(MONO)
         .text_size(px(12.))
-        .text_color(rgb(TEXT_3))
+        .text_color(rgb(t!(TEXT_3)))
         .truncate()
         .child(path.display().to_string())
 }
 
 fn note(text: impl Into<SharedString>) -> Div {
     div()
-        .px(px(18.))
-        .py(px(14.))
-        .rounded(px(12.))
+        .px(px(SP_4))
+        .py(px(SP_3))
+        .rounded(px(R_CARD))
         .border_1()
-        .border_color(rgba(0x3b9eff40))
-        .bg(rgba(0x3b9eff14))
-        .text_color(rgb(TEXT_2))
+        .border_color(rgba(t!(PRIMARY_TINT_25)))
+        .bg(rgba(t!(PRIMARY_TINT_08)))
+        .text_color(rgb(t!(TEXT_2)))
         .child(text.into())
 }
 
 fn segment(label: &str, active: bool) -> Div {
     div()
-        .px(px(14.))
+        .px(px(SP_3))
         .py(px(6.))
-        .rounded(px(7.))
+        .rounded(px(R_BADGE))
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
-        .when(active, |el| el.bg(rgb(BG_CARD)).text_color(rgb(PRIMARY)))
-        .when(!active, |el| el.text_color(rgb(TEXT_2)))
+        .when(active, |el| {
+            el.bg(rgb(t!(BG_CARD))).text_color(rgb(t!(PRIMARY)))
+        })
+        .when(!active, |el| el.text_color(rgb(t!(TEXT_2))))
         .child(label.to_owned())
 }
 
@@ -539,10 +753,10 @@ fn segmented() -> Div {
         .flex_shrink_0()
         .gap(px(2.))
         .p(px(3.))
-        .rounded(px(9.))
+        .rounded(px(R_CTRL))
         .border_1()
-        .border_color(rgb(BORDER_SUBTLE))
-        .bg(rgb(BG_ELEVATED))
+        .border_color(rgb(t!(BORDER_SUBTLE)))
+        .bg(rgb(t!(BG_ELEVATED)))
 }
 
 fn stepper_button(label: &str) -> Hoverable {
@@ -554,12 +768,12 @@ fn stepper_button(label: &str) -> Hoverable {
             .justify_center()
             .rounded(px(8.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(BG_CARD))
-            .text_color(rgb(TEXT_2))
+            .border_color(rgb(t!(BORDER)))
+            .bg(rgb(t!(BG_CARD)))
+            .text_color(rgb(t!(TEXT_2)))
             .font_weight(FontWeight::BOLD)
             .child(label.to_owned()),
-        |s| s.bg(rgb(BG_HOVER)).border_color(rgb(BORDER_HOVER)),
+        |s| s.bg(rgb(t!(BG_HOVER))).border_color(rgb(t!(BORDER_HOVER))),
     )
 }
 
@@ -589,8 +803,8 @@ fn popover(content: Div, close: impl Fn(&MouseDownEvent, &mut Window, &mut App) 
                 .w(px(360.))
                 .rounded(px(12.))
                 .border_1()
-                .border_color(rgb(BORDER_SUBTLE))
-                .bg(rgb(BG_CARD))
+                .border_color(rgb(t!(BORDER_SUBTLE)))
+                .bg(rgb(t!(BG_CARD)))
                 .shadow_lg()
                 .overflow_hidden()
                 .occlude()
@@ -625,7 +839,7 @@ fn progress_ring(size: f32, ratio: f32) -> impl IntoElement {
                 at(0.9999),
             );
             if let Ok(path) = track.build() {
-                window.paint_path(path, rgb(BORDER_SUBTLE));
+                window.paint_path(path, rgb(t!(BORDER_SUBTLE)));
             }
             if ratio > 0.005 {
                 let mut arc = PathBuilder::stroke(px(stroke));
@@ -639,7 +853,7 @@ fn progress_ring(size: f32, ratio: f32) -> impl IntoElement {
                     at(end),
                 );
                 if let Ok(path) = arc.build() {
-                    window.paint_path(path, rgb(PRIMARY));
+                    window.paint_path(path, rgb(t!(PRIMARY)));
                 }
             }
         },
@@ -671,13 +885,36 @@ impl Render for MarinaWindow {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(BG))
+            .bg(rgb(t!(BG)))
             .font_family(FONT)
             .text_size(px(13.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(t!(TEXT)))
             .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key != "escape" {
+            .on_mouse_move(cx.listener(|_this, _event: &MouseMoveEvent, _window, cx| {
+                // Repaint on every mouse move so native hover styles apply the
+                // instant the pointer arrives, instead of waiting for the next
+                // monitor tick.
+                cx.notify();
+            }))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let ks = &event.keystroke;
+                // Global shortcuts: Ctrl/Cmd+N new instance, Ctrl/Cmd+, settings.
+                if (ks.modifiers.control || ks.modifiers.platform) && !ks.modifiers.alt {
+                    match ks.key.as_str() {
+                        "n" => {
+                            this.open_new_dialog(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        "," => {
+                            this.active_view = View::GlobalSettings;
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                if ks.key != "escape" {
                     return;
                 }
                 // 键盘关窗：对话框优先，其次是两个浮层；进行中的任务不打断。
@@ -734,24 +971,24 @@ impl MarinaWindow {
             .border_1()
             .font_weight(FontWeight::MEDIUM)
             .when(in_settings, |el| {
-                el.bg(rgb(PRIMARY_MUTED))
-                    .border_color(rgba(0x0d6efd4d))
-                    .text_color(rgb(PRIMARY))
+                el.bg(rgb(t!(PRIMARY_MUTED)))
+                    .border_color(rgba(t!(PRIMARY_TINT_25)))
+                    .text_color(rgb(t!(PRIMARY)))
             })
             .when(!in_settings, |el| {
-                el.border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT_2))
+                el.border_color(rgb(t!(BORDER)))
+                    .text_color(rgb(t!(TEXT_2)))
                     .hover(|s| {
-                        s.bg(rgb(BG_HOVER))
-                            .border_color(rgb(BORDER_HOVER))
-                            .text_color(rgb(TEXT))
+                        s.bg(rgb(t!(BG_HOVER)))
+                            .border_color(rgb(t!(BORDER_HOVER)))
+                            .text_color(rgb(t!(TEXT)))
                     })
             })
             .child(
                 svg()
                     .path("icons/settings.svg")
                     .size(px(15.))
-                    .text_color(rgb(if in_settings { PRIMARY } else { TEXT_2 })),
+                    .text_color(rgb(if in_settings { t!(PRIMARY) } else { t!(TEXT_2) })),
             )
             .child("设置");
         div()
@@ -761,9 +998,9 @@ impl MarinaWindow {
             .gap(px(8.))
             .h(px(TITLEBAR_HEIGHT))
             .pl(px(24.))
-            .bg(rgb(BG_CARD))
+            .bg(rgb(t!(BG_CARD)))
             .border_b_1()
-            .border_color(rgb(BORDER_SUBTLE))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
             .child(
                 div()
                     .flex()
@@ -782,7 +1019,7 @@ impl MarinaWindow {
                         div()
                             .text_size(px(11.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .child("MULTI-INSTANCE"),
                     ),
             )
@@ -825,7 +1062,7 @@ impl MarinaWindow {
                     .child(caption_button(
                         WindowControlArea::Min,
                         false,
-                        div().w(px(10.)).h(px(1.)).bg(rgb(TEXT_2)),
+                        div().w(px(10.)).h(px(1.)).bg(rgb(t!(TEXT_2))),
                     ))
                     .child(caption_button(
                         WindowControlArea::Max,
@@ -841,7 +1078,7 @@ impl MarinaWindow {
                                         .right_0()
                                         .size(px(8.))
                                         .border_1()
-                                        .border_color(rgb(TEXT_2)),
+                                        .border_color(rgb(t!(TEXT_2))),
                                 )
                                 .child(
                                     div()
@@ -850,10 +1087,10 @@ impl MarinaWindow {
                                         .left_0()
                                         .size(px(8.))
                                         .border_1()
-                                        .border_color(rgb(TEXT_2)),
+                                        .border_color(rgb(t!(TEXT_2))),
                                 )
                         } else {
-                            div().size(px(10.)).border_1().border_color(rgb(TEXT_2))
+                            div().size(px(10.)).border_1().border_color(rgb(t!(TEXT_2)))
                         },
                     ))
                     .child(caption_button(
@@ -898,14 +1135,14 @@ impl MarinaWindow {
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .when(open, |el| el.bg(rgb(PRIMARY_MUTED)))
-                .when(!open, |el| el.hover(|s| s.bg(rgb(BG_HOVER))))
+                .when(open, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
+                .when(!open, |el| el.hover(|s| s.bg(rgb(t!(BG_HOVER)))))
                 .child(progress_ring(34., ratio))
                 .child(
                     svg()
                         .path("icons/download.svg")
                         .size(px(15.))
-                        .text_color(rgb(PRIMARY)),
+                        .text_color(rgb(t!(PRIMARY))),
                 )
                 .when(count > 1, |el| {
                     el.child(
@@ -918,8 +1155,8 @@ impl MarinaWindow {
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .bg(rgb(PRIMARY))
-                            .text_color(white())
+                            .bg(rgb(t!(PRIMARY)))
+                            .text_color(rgb(t!(TEXT_ON_PRIMARY)))
                             .text_size(px(9.))
                             .font_weight(FontWeight::BOLD)
                             .child(count.to_string()),
@@ -947,6 +1184,7 @@ impl MarinaWindow {
             };
             let detail = match job.phase {
                 JobPhase::Installing => "正在校验并安装…".to_owned(),
+                JobPhase::Paused => "已暂停，可继续下载".to_owned(),
                 JobPhase::Downloading => {
                     let mut text = if total > 0 {
                         format!(
@@ -968,6 +1206,10 @@ impl MarinaWindow {
                 }
             };
             let key = job.key.clone();
+            let is_dsh = key.starts_with("dsh:");
+            let ver = key.trim_start_matches("dsh:").to_owned();
+            let downloading = job.phase == JobPhase::Downloading;
+            let paused = job.phase == JobPhase::Paused;
             div()
                 .flex()
                 .flex_col()
@@ -975,7 +1217,7 @@ impl MarinaWindow {
                 .px(px(16.))
                 .py(px(12.))
                 .when(index > 0, |el| {
-                    el.border_t_1().border_color(rgb(BORDER_SUBTLE))
+                    el.border_t_1().border_color(rgb(t!(BORDER_SUBTLE)))
                 })
                 .child(
                     div()
@@ -991,17 +1233,64 @@ impl MarinaWindow {
                                 .child(job.title.clone()),
                         )
                         .child(hint(format!("{}%", (ratio * 100.).round() as u32)))
+                        .when(is_dsh && downloading, |el| {
+                            el.child(clickable(
+                                Hoverable::new(
+                                    div()
+                                        .px(px(6.))
+                                        .rounded(px(5.))
+                                        .text_size(px(12.))
+                                        .text_color(rgb(t!(TEXT_3)))
+                                        .child("暂停"),
+                                    |s| s.bg(rgb(t!(BG_HOVER))).text_color(rgb(t!(TEXT))),
+                                ),
+                                true,
+                                {
+                                    let key = key.clone();
+                                    cx.listener(move |this, _, _, cx| this.pause_job(&key, cx))
+                                },
+                            ))
+                        })
+                        .when(is_dsh && paused, |el| {
+                            el.child(clickable(
+                                Hoverable::new(
+                                    div()
+                                        .px(px(6.))
+                                        .rounded(px(5.))
+                                        .text_size(px(12.))
+                                        .text_color(rgb(t!(PRIMARY)))
+                                        .child("继续"),
+                                    |s| s.bg(rgb(t!(BG_HOVER))),
+                                ),
+                                true,
+                                {
+                                    let ver = ver.clone();
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.download_runtime(
+                                            download::RemoteVersion {
+                                                version: ver.clone(),
+                                                prerelease: false,
+                                                release_date: String::new(),
+                                                feed_url: String::new(),
+                                                feed: None,
+                                            },
+                                            cx,
+                                        )
+                                    })
+                                },
+                            ))
+                        })
                         .child(clickable(
                             Hoverable::new(
                                 div()
                                     .px(px(6.))
                                     .rounded(px(5.))
                                     .text_size(px(12.))
-                                    .text_color(rgb(TEXT_3))
+                                    .text_color(rgb(t!(TEXT_3)))
                                     .child("取消"),
-                                |s| s.bg(rgb(BG_HOVER)).text_color(rgb(DANGER)),
+                                |s| s.bg(rgb(t!(BG_HOVER))).text_color(rgb(t!(DANGER))),
                             ),
-                            job.phase == JobPhase::Downloading,
+                            downloading || paused,
                             cx.listener(move |this, _, _, cx| this.cancel_job(&key, cx)),
                         )),
                 )
@@ -1010,12 +1299,12 @@ impl MarinaWindow {
                         .h(px(5.))
                         .w_full()
                         .rounded(px(3.))
-                        .bg(rgb(BG_ELEVATED))
+                        .bg(rgb(t!(BG_ELEVATED)))
                         .child(
                             div()
                                 .h_full()
                                 .rounded(px(3.))
-                                .bg(rgb(PRIMARY))
+                                .bg(rgb(t!(PRIMARY)))
                                 .w(relative(ratio)),
                         ),
                 )
@@ -1032,7 +1321,7 @@ impl MarinaWindow {
                     .px(px(16.))
                     .py(px(11.))
                     .border_b_1()
-                    .border_color(rgb(BORDER_SUBTLE))
+                    .border_color(rgb(t!(BORDER_SUBTLE)))
                     .child(div().font_weight(FontWeight::BOLD).child("下载"))
                     .child(hint(format!("{} 项进行中", self.download.jobs.len()))),
             )
@@ -1057,13 +1346,13 @@ impl MarinaWindow {
                 .items_center()
                 .justify_center()
                 .rounded(px(8.))
-                .when(open, |el| el.bg(rgb(PRIMARY_MUTED)))
-                .when(!open, |el| el.hover(|s| s.bg(rgb(BG_HOVER))))
+                .when(open, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
+                .when(!open, |el| el.hover(|s| s.bg(rgb(t!(BG_HOVER)))))
                 .child(
                     svg()
                         .path("icons/bell.svg")
                         .size(px(17.))
-                        .text_color(rgb(if open { PRIMARY } else { TEXT_2 })),
+                        .text_color(rgb(if open { t!(PRIMARY) } else { t!(TEXT_2) })),
                 )
                 .when(unread > 0, |el| {
                     el.child(
@@ -1079,9 +1368,9 @@ impl MarinaWindow {
                             .justify_center()
                             .rounded_full()
                             .border_2()
-                            .border_color(rgb(BG_CARD))
-                            .bg(rgb(DANGER))
-                            .text_color(white())
+                            .border_color(rgb(t!(BG_CARD)))
+                            .bg(rgb(t!(DANGER)))
+                            .text_color(rgb(t!(TEXT_ON_PRIMARY)))
                             .text_size(px(8.5))
                             .font_weight(FontWeight::BOLD)
                             .child(if unread > 99 {
@@ -1125,7 +1414,7 @@ impl MarinaWindow {
                         .px(px(16.))
                         .py(px(10.))
                         .when(index > 0, |el| {
-                            el.border_t_1().border_color(rgb(BORDER_SUBTLE))
+                            el.border_t_1().border_color(rgb(t!(BORDER_SUBTLE)))
                         })
                         .child(
                             div()
@@ -1133,7 +1422,7 @@ impl MarinaWindow {
                                 .mt(px(5.))
                                 .size(px(7.))
                                 .rounded_full()
-                                .bg(rgb(if *error { DANGER } else { SUCCESS })),
+                                .bg(rgb(if *error { t!(DANGER) } else { t!(SUCCESS) })),
                         )
                         .child(
                             div()
@@ -1145,7 +1434,7 @@ impl MarinaWindow {
                                 .child(
                                     div()
                                         .text_size(px(12.5))
-                                        .text_color(rgb(if *error { DANGER } else { TEXT }))
+                                        .text_color(rgb(if *error { t!(DANGER) } else { t!(TEXT) }))
                                         .child(text.clone()),
                                 )
                                 .child(hint(time).text_size(px(10.5))),
@@ -1174,14 +1463,14 @@ impl MarinaWindow {
                         .px(px(16.))
                         .py(px(11.))
                         .border_b_1()
-                        .border_color(rgb(BORDER_SUBTLE))
-                        .bg(rgb(PRIMARY_MUTED))
+                        .border_color(rgb(t!(BORDER_SUBTLE)))
+                        .bg(rgb(t!(PRIMARY_MUTED)))
                         .child(
                             div()
                                 .flex_shrink_0()
                                 .size(px(7.))
                                 .rounded_full()
-                                .bg(rgb(PRIMARY)),
+                                .bg(rgb(t!(PRIMARY))),
                         )
                         .child(
                             div()
@@ -1194,7 +1483,7 @@ impl MarinaWindow {
                                     div()
                                         .text_size(px(12.5))
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(PRIMARY))
+                                        .text_color(rgb(t!(PRIMARY)))
                                         .child(label),
                                 )
                                 .child(hint("点击查看更新内容").text_size(px(10.5))),
@@ -1216,7 +1505,7 @@ impl MarinaWindow {
                     .px(px(16.))
                     .py(px(11.))
                     .border_b_1()
-                    .border_color(rgb(BORDER_SUBTLE))
+                    .border_color(rgb(t!(BORDER_SUBTLE)))
                     .child(div().font_weight(FontWeight::BOLD).child("消息"))
                     .child(clickable(
                         Hoverable::new(
@@ -1224,9 +1513,9 @@ impl MarinaWindow {
                                 .px(px(6.))
                                 .rounded(px(5.))
                                 .text_size(px(12.))
-                                .text_color(rgb(TEXT_3))
+                                .text_color(rgb(t!(TEXT_3)))
                                 .child("清空"),
-                            |s| s.bg(rgb(BG_HOVER)).text_color(rgb(TEXT)),
+                            |s| s.bg(rgb(t!(BG_HOVER))).text_color(rgb(t!(TEXT))),
                         ),
                         !empty,
                         cx.listener(|this, _, _, cx| {
@@ -1248,7 +1537,7 @@ impl MarinaWindow {
                             svg()
                                 .path("icons/inbox.svg")
                                 .size(px(26.))
-                                .text_color(rgb(TEXT_3)),
+                                .text_color(rgb(t!(TEXT_3))),
                         )
                         .child(hint("还没有消息")),
                 )
@@ -1272,22 +1561,22 @@ impl MarinaWindow {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> Div {
         let total = self.instances.len();
-        let running = self
-            .instances
-            .iter()
-            .filter(|i| is_running(&self.get_instance_status(&i.id)))
-            .count();
-        let ratio = if total == 0 {
-            0.
-        } else {
-            running as f32 / total as f32
-        };
         let total_memory: u64 = self
             .instances
             .iter()
             .filter(|i| is_running(&self.get_instance_status(&i.id)))
             .filter_map(|i| self.memory.get(&i.id))
             .sum();
+        // Physical RAM is constant for the process lifetime; query it once.
+        static SYSTEM_MEM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let system_memory = *SYSTEM_MEM.get_or_init(dsh_marina::platform::total_physical_memory);
+        // The bar reflects real memory pressure (instance sum / physical RAM),
+        // not the fraction of instances that happen to be running.
+        let ratio = if system_memory == 0 {
+            0.
+        } else {
+            (total_memory as f32 / system_memory as f32).clamp(0., 1.)
+        };
         let data_root = self.state.repository.data_root().display().to_string();
 
         let items: Vec<Div> = self
@@ -1327,10 +1616,11 @@ impl MarinaWindow {
                                 FontWeight::MEDIUM
                             })
                             .when(active, |el| {
-                                el.bg(rgb(PRIMARY_MUTED)).text_color(rgb(PRIMARY))
+                                el.bg(rgb(t!(PRIMARY_MUTED))).text_color(rgb(t!(PRIMARY)))
                             })
                             .when(!active, |el| {
-                                el.text_color(rgb(TEXT)).hover(|s| s.bg(rgb(BG_HOVER)))
+                                el.text_color(rgb(t!(TEXT)))
+                                    .hover(|s| s.bg(rgb(t!(BG_HOVER))))
                             })
                             .child(tr(label)),
                         true,
@@ -1343,7 +1633,7 @@ impl MarinaWindow {
                     .mt(px(10.))
                     .mx(px(2.))
                     .h(px(1.))
-                    .bg(rgb(BORDER_SUBTLE)),
+                    .bg(rgb(t!(BORDER_SUBTLE))),
             );
 
         let new_instance = clickable(
@@ -1358,17 +1648,17 @@ impl MarinaWindow {
                 .rounded(px(8.))
                 .border_1()
                 .border_dashed()
-                .border_color(rgba(0x0d6efd66))
-                .bg(rgba(0x0d6efd0a))
-                .text_color(rgb(PRIMARY))
+                .border_color(rgba(t!(PRIMARY_TINT_25)))
+                .bg(rgba(t!(PRIMARY_TINT_08)))
+                .text_color(rgb(t!(PRIMARY)))
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .hover(|s| s.bg(rgb(PRIMARY_MUTED)).border_color(rgb(PRIMARY)))
+                .hover(|s| s.bg(rgb(t!(PRIMARY_MUTED))).border_color(rgb(t!(PRIMARY))))
                 .child(
                     svg()
                         .path("icons/plus.svg")
                         .size(px(14.))
-                        .text_color(rgb(PRIMARY)),
+                        .text_color(rgb(t!(PRIMARY))),
                 )
                 .child(tr("新建实例")),
             true,
@@ -1381,9 +1671,9 @@ impl MarinaWindow {
             .flex_shrink_0()
             .w(px(248.))
             .h_full()
-            .bg(rgb(BG_CARD))
+            .bg(rgb(t!(BG_CARD)))
             .border_r_1()
-            .border_color(rgb(BORDER_SUBTLE))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
             .child(nav)
             .child(new_instance)
             .child(
@@ -1398,7 +1688,7 @@ impl MarinaWindow {
                         div()
                             .text_size(px(11.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .child(format!("实例 · {total}")),
                     ),
             )
@@ -1418,7 +1708,7 @@ impl MarinaWindow {
                                 .px(px(6.))
                                 .py(px(12.))
                                 .text_size(px(12.))
-                                .text_color(rgb(TEXT_3))
+                                .text_color(rgb(t!(TEXT_3)))
                                 .child("还没有实例，点上面的「新建实例」开始"),
                         )
                     })
@@ -1433,35 +1723,45 @@ impl MarinaWindow {
                     .px(px(18.))
                     .py(px(12.))
                     .border_t_1()
-                    .border_color(rgb(BORDER_SUBTLE))
+                    .border_color(rgb(t!(BORDER_SUBTLE)))
                     .text_size(px(12.))
-                    .text_color(rgb(TEXT_2))
+                    .text_color(rgb(t!(TEXT_2)))
                     .child(
-                        div().flex().gap(px(4.)).child("内存占用").child(
-                            div()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(TEXT))
-                                .child(if running == 0 {
-                                    "—".to_owned()
-                                } else {
-                                    storage::format_bytes(total_memory)
-                                }),
-                        ),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(4.))
+                            .child("实例内存")
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(t!(TEXT)))
+                                    .child(if system_memory == 0 {
+                                        storage::format_bytes(total_memory)
+                                    } else {
+                                        format!(
+                                            "{} / {}",
+                                            storage::format_bytes(total_memory),
+                                            storage::format_bytes(system_memory)
+                                        )
+                                    }),
+                            ),
                     )
                     .child(
                         div()
                             .h(px(4.))
                             .w_full()
                             .rounded(px(2.))
-                            .bg(rgb(BG_ELEVATED))
+                            .bg(rgb(t!(BG_ELEVATED)))
                             .overflow_hidden()
-                            .child(div().h_full().w(relative(ratio)).bg(rgb(PRIMARY))),
+                            .child(div().h_full().w(relative(ratio)).bg(rgb(t!(PRIMARY)))),
                     )
                     .child(
                         div()
                             .id("sidebar-data-root")
                             .text_size(px(11.))
-                            .text_color(rgb(TEXT_3))
+                            .text_color(rgb(t!(TEXT_3)))
                             .truncate()
                             .child(format!("数据目录 {data_root}"))
                             .tooltip({
@@ -1495,8 +1795,8 @@ impl MarinaWindow {
             .px(px(10.))
             .py(px(7.))
             .rounded(px(8.))
-            .when(active, |el| el.bg(rgb(PRIMARY_MUTED)))
-            .when(!active, |el| el.hover(|s| s.bg(rgb(BG_HOVER))))
+            .when(active, |el| el.bg(rgb(t!(PRIMARY_MUTED))))
+            .when(!active, |el| el.hover(|s| s.bg(rgb(t!(BG_HOVER)))))
             .child(badge(
                 &badge_text(instance),
                 hex_color(&instance.color),
@@ -1524,7 +1824,7 @@ impl MarinaWindow {
                                     } else {
                                         FontWeight::SEMIBOLD
                                     })
-                                    .text_color(rgb(if active { PRIMARY } else { TEXT }))
+                                    .text_color(rgb(if active { t!(PRIMARY) } else { t!(TEXT) }))
                                     .child(instance.name.clone()),
                             )
                             .when(
@@ -1535,8 +1835,8 @@ impl MarinaWindow {
                                             .flex_shrink_0()
                                             .px(px(5.))
                                             .rounded(px(4.))
-                                            .bg(rgba(0xd9770622))
-                                            .text_color(rgb(0xd97706))
+                                            .bg(rgba(0xf59e0b26))
+                                            .text_color(rgb(t!(WARNING_TEXT)))
                                             .text_size(px(9.5))
                                             .font_weight(FontWeight::BOLD)
                                             .child("原版"),
@@ -1562,7 +1862,7 @@ impl MarinaWindow {
                                     .min_w(px(0.))
                                     .truncate()
                                     .text_size(px(11.))
-                                    .text_color(rgb(if crashed { DANGER } else { TEXT_3 }))
+                                    .text_color(rgb(if crashed { t!(DANGER) } else { t!(TEXT_3) }))
                                     .child(meta),
                             ),
                     ),
@@ -1616,7 +1916,7 @@ impl MarinaWindow {
             .flex_1()
             .min_w(px(0.))
             .h_full()
-            .bg(rgb(BG))
+            .bg(rgb(t!(BG)))
             .child(content)
     }
 
@@ -1823,8 +2123,8 @@ impl MarinaWindow {
             .mb(px(14.))
             .rounded(px(10.))
             .border_1()
-            .border_color(rgb(BORDER_SUBTLE))
-            .bg(rgb(BG_ELEVATED))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
+            .bg(rgb(t!(BG_ELEVATED)))
             .children(
                 cells
                     .into_iter()
@@ -1856,13 +2156,13 @@ impl MarinaWindow {
                         .py(px(10.))
                         .border_b_2()
                         .border_color(if active {
-                            rgb(PRIMARY).into()
+                            rgb(t!(PRIMARY)).into()
                         } else {
                             transparent_black()
                         })
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(if active { PRIMARY } else { TEXT_3 }))
-                        .when(!active, |el| el.hover(|s| s.text_color(rgb(TEXT_2))))
+                        .text_color(rgb(if active { t!(PRIMARY) } else { t!(TEXT_3) }))
+                        .when(!active, |el| el.hover(|s| s.text_color(rgb(t!(TEXT_2)))))
                         .child(label)
                         .when_some(count, |el, count| {
                             el.child(
@@ -1872,12 +2172,16 @@ impl MarinaWindow {
                                     .rounded(px(11.))
                                     .border_1()
                                     .border_color(if active {
-                                        rgba(0x3b9eff4d)
+                                        rgba(t!(PRIMARY_TINT_25))
                                     } else {
-                                        rgb(BORDER_SUBTLE)
+                                        rgb(t!(BORDER_SUBTLE))
                                     })
-                                    .bg(rgb(if active { PRIMARY_MUTED } else { BG_ELEVATED }))
-                                    .text_color(rgb(if active { PRIMARY } else { TEXT_3 }))
+                                    .bg(rgb(if active {
+                                        t!(PRIMARY_MUTED)
+                                    } else {
+                                        t!(BG_ELEVATED)
+                                    }))
+                                    .text_color(rgb(if active { t!(PRIMARY) } else { t!(TEXT_3) }))
                                     .text_size(px(11.))
                                     .font_weight(FontWeight::BOLD)
                                     .child(count.to_string()),
@@ -1899,9 +2203,9 @@ impl MarinaWindow {
             .flex_shrink_0()
             .px(px(28.))
             .pt(px(20.))
-            .bg(rgb(BG_CARD))
+            .bg(rgb(t!(BG_CARD)))
             .border_b_1()
-            .border_color(rgb(BORDER_SUBTLE))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
             .child(
                 div()
                     .flex()
@@ -1939,7 +2243,7 @@ impl MarinaWindow {
                                 el.child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(rgb(TEXT_2))
+                                        .text_color(rgb(t!(TEXT_2)))
                                         .line_clamp(1)
                                         .child(instance.notes.clone()),
                                 )
@@ -1963,12 +2267,12 @@ fn stat(first: bool, key: &str, value: String, sub: Option<String>) -> Div {
         .px(px(14.))
         .py(px(9.))
         .when(!first, |el| {
-            el.border_l_1().border_color(rgb(BORDER_SUBTLE))
+            el.border_l_1().border_color(rgb(t!(BORDER_SUBTLE)))
         })
         .child(
             div()
                 .text_size(px(11.))
-                .text_color(rgb(TEXT_3))
+                .text_color(rgb(t!(TEXT_3)))
                 .child(tr(key)),
         )
         .child(
@@ -1976,14 +2280,14 @@ fn stat(first: bool, key: &str, value: String, sub: Option<String>) -> Div {
                 .truncate()
                 .text_size(px(14.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(TEXT))
+                .text_color(rgb(t!(TEXT)))
                 .child(value),
         )
         .child(
             div()
                 .truncate()
                 .text_size(px(10.5))
-                .text_color(rgb(TEXT_3))
+                .text_color(rgb(t!(TEXT_3)))
                 .child(sub.unwrap_or_else(|| "\u{00a0}".to_owned())),
         )
 }

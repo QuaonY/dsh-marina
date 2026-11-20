@@ -48,6 +48,12 @@ impl MarinaWindow {
             .child(card_head("通用", div()))
             .child(form_row(
                 false,
+                "深色模式",
+                "切换深色外观，立即生效并自动保存",
+                toggle(settings.dark_mode, |s| s.dark_mode = !s.dark_mode, cx),
+            ))
+            .child(form_row(
+                false,
                 "开机自启动",
                 "Windows 启动时自动运行 Marina",
                 auto_start,
@@ -222,7 +228,7 @@ impl MarinaWindow {
                         .py(px(6.))
                         .text_size(px(12.5))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(SUCCESS))
+                        .text_color(rgb(t!(SUCCESS)))
                         .child(format!("✓ 已托管运行时（{} 个）", managed_runtimes.len())),
                 ),
             );
@@ -241,7 +247,7 @@ impl MarinaWindow {
                         .py(px(6.))
                         .text_size(px(12.5))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(WARNING_TEXT))
+                        .text_color(rgb(t!(WARNING_TEXT)))
                         .child("⚠ 外部安装版本"),
                 ),
             );
@@ -327,9 +333,17 @@ impl MarinaWindow {
                             .py(px(5.))
                             .rounded(px(7.))
                             .border_1()
-                            .border_color(rgb(if selected { PRIMARY } else { BORDER_SUBTLE }))
-                            .bg(rgb(if selected { PRIMARY_MUTED } else { BG_CARD }))
-                            .text_color(rgb(if selected { PRIMARY } else { TEXT_2 }))
+                            .border_color(rgb(if selected {
+                                t!(PRIMARY)
+                            } else {
+                                t!(BORDER_SUBTLE)
+                            }))
+                            .bg(rgb(if selected {
+                                t!(PRIMARY_MUTED)
+                            } else {
+                                t!(BG_CARD)
+                            }))
+                            .text_color(rgb(if selected { t!(PRIMARY) } else { t!(TEXT_2) }))
                             .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(source.label()),
@@ -359,7 +373,7 @@ impl MarinaWindow {
             .px(px(20.))
             .py(px(14.))
             .border_t_1()
-            .border_color(rgb(BORDER_SUBTLE))
+            .border_color(rgb(t!(BORDER_SUBTLE)))
             .child(div().font_weight(FontWeight::SEMIBOLD).child(if current_source == DownloadSource::Custom {
                 "下载链接（自定义）"
             } else {
@@ -391,16 +405,16 @@ impl MarinaWindow {
                             .px(px(12.))
                             .py(px(10.))
                             .rounded(px(8.))
-                            .bg(rgba(PRIMARY_TINT_08))
+                            .bg(rgba(t!(PRIMARY_TINT_08)))
                             .border_1()
-                            .border_color(rgba(PRIMARY_TINT_25))
+                            .border_color(rgba(t!(PRIMARY_TINT_25)))
                             .child(
                                 div()
                                     .w_full()
                                     .min_w(px(0.))
                                     .line_height(px(18.))
                                     .text_size(px(12.))
-                                    .text_color(rgb(TEXT_2))
+                                    .text_color(rgb(t!(TEXT_2)))
                                     .child("💡 运行时共用机制：多个实例可以共用同一个 DSH 运行时（程序文件），节省磁盘空间。每个实例的数据（插件、配置、会话、登录信息）完全隔离，互不影响。删除运行时不会影响实例数据。")
                             )
                     )
@@ -514,7 +528,7 @@ impl MarinaWindow {
                 .px(px(20.))
                 .py(px(13.))
                 .when(!first, |el| {
-                    el.border_t_1().border_color(rgb(BORDER_SUBTLE))
+                    el.border_t_1().border_color(rgb(t!(BORDER_SUBTLE)))
                 })
                 .child(
                     div()
@@ -570,7 +584,7 @@ impl MarinaWindow {
                 div().flex().items_center().gap(px(8.)).child(
                     div()
                         .text_size(px(12.5))
-                        .text_color(rgb(DANGER))
+                        .text_color(rgb(t!(DANGER)))
                         .child(format!("检查失败：{error}")),
                 ),
                 check_button("重试", false, cx),
@@ -675,7 +689,7 @@ impl MarinaWindow {
                 "作者",
                 div()
                     .text_size(px(12.5))
-                    .text_color(rgb(TEXT_2))
+                    .text_color(rgb(t!(TEXT_2)))
                     .child("Quaon"),
             ))
             .child(about_row(
@@ -686,8 +700,8 @@ impl MarinaWindow {
                         .flex_shrink_0()
                         .text_size(px(12.5))
                         .font_family(MONO)
-                        .text_color(rgb(PRIMARY))
-                        .hover(|s| s.text_color(rgb(PRIMARY_HOVER)))
+                        .text_color(rgb(t!(PRIMARY)))
+                        .hover(|s| s.text_color(rgb(t!(PRIMARY_HOVER))))
                         .child("https://github.com/QuaonY/dsh-marina"),
                     true,
                     cx.listener(|_, _, _, cx| cx.open_url("https://github.com/QuaonY/dsh-marina")),
@@ -836,6 +850,8 @@ impl MarinaWindow {
             let version = job.key.trim_start_matches("dsh:").to_owned();
             let label = if job.phase == JobPhase::Installing {
                 format!("正在校验并安装 DSH {version}…")
+            } else if job.phase == JobPhase::Paused {
+                format!("DSH {version} 已暂停，可继续下载")
             } else {
                 let rate = match job.speed(done) {
                     Some(speed) => {
@@ -861,18 +877,43 @@ impl MarinaWindow {
                         .h(px(6.))
                         .w_full()
                         .rounded(px(3.))
-                        .bg(rgb(BG_ELEVATED))
+                        .bg(rgb(t!(BG_ELEVATED)))
                         .child(
                             div()
                                 .h_full()
                                 .rounded(px(3.))
-                                .bg(rgb(PRIMARY))
+                                .bg(rgb(t!(PRIMARY)))
                                 .w(relative(ratio)),
                         ),
                 );
+            let downloading = job.phase == JobPhase::Downloading;
+            let paused = job.phase == JobPhase::Paused;
+            if downloading {
+                actions = actions.child(clickable(btn("暂停", Tone::Default, true), true, {
+                    let key = job.key.clone();
+                    cx.listener(move |this, _, _, cx| this.pause_job(&key, cx))
+                }));
+            }
+            if paused {
+                actions = actions.child(clickable(btn("继续", Tone::Primary, true), true, {
+                    let version = version.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        this.download_runtime(
+                            download::RemoteVersion {
+                                version: version.clone(),
+                                prerelease: false,
+                                release_date: String::new(),
+                                feed_url: String::new(),
+                                feed: None,
+                            },
+                            cx,
+                        )
+                    })
+                }));
+            }
             actions = actions.child(clickable(
                 btn("取消", Tone::Default, true),
-                job.phase == JobPhase::Downloading,
+                downloading || paused,
                 {
                     let key = job.key.clone();
                     cx.listener(move |this, _, _, cx| this.cancel_job(&key, cx))
@@ -922,7 +963,7 @@ impl MarinaWindow {
             ));
         }
         if let Some(error) = &state.error {
-            info = info.child(div().text_color(rgb(DANGER)).child(error.clone()));
+            info = info.child(div().text_color(rgb(t!(DANGER))).child(error.clone()));
         }
         row_item(false).child(info).child(actions)
     }

@@ -45,12 +45,12 @@ actions!(marina, [ShowWindow, QuitApp]);
 /// How long a stopping instance gets to close its window before the job is terminated.
 const STOP_GRACE: Duration = Duration::from_secs(30);
 
-/// `%USERPROFILE%\.dsh-marina`, where the data lives unless it was moved.
+/// Shared `(done, total)` byte progress and cancel flag of a background download.
+type DownloadProgress = (Arc<Mutex<(u64, u64)>>, Arc<std::sync::atomic::AtomicBool>);
+
+/// `~/.dsh-marina`, where the data lives unless it was moved.
 fn default_data_root() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("C:\\Users\\Public"))
-        .join(".dsh-marina")
+    platform::home_dir().join(".dsh-marina")
 }
 
 /// `DSH_MARINA_DATA` overrides everything; otherwise the location chosen in
@@ -173,10 +173,13 @@ fn tray_icon(state: TrayIconState) -> Option<TrayIconImage> {
 }
 
 fn show_main_window(_: &ShowWindow, cx: &mut App) {
-    if let Some(hwnd) = cx.try_global::<MarinaApp>().and_then(|app| app.hwnd) {
+    let Some(app) = cx.try_global::<MarinaApp>() else {
+        return;
+    };
+    if let Some(hwnd) = app.hwnd {
         platform::show_window(hwnd);
     } else {
-        platform::activate_window(APP_TITLE);
+        platform::activate_window(APP_TITLE, app.state.repository.data_root());
     }
 }
 
@@ -331,24 +334,29 @@ fn perform_quit(mode: StopMode, hook: Option<QuitHook>, cx: &mut App) {
 /// Queued `dsh://` links.  While Marina handles links it also takes the
 /// protocol back from DSH, which re-registers itself on every launch.
 fn poll_links(state: &AppState) -> Vec<String> {
-    let settings = state.settings_store.load().unwrap_or_default();
-    if settings.handle_links
-        && let Ok(exe) = platform::current_executable()
+    // On macOS the protocol is declared by the app bundle (Info.plist); there
+    // is no per-user registry to reclaim, so only the queue is drained.
+    #[cfg(windows)]
     {
-        let current = links::registry::current_command();
-        if !current
-            .as_deref()
-            .is_some_and(|c| links::is_marina_command(c, &exe))
+        let settings = state.settings_store.load().unwrap_or_default();
+        if settings.handle_links
+            && let Ok(exe) = platform::current_executable()
         {
-            if let Some(command) = current
-                && settings.previous_link_command.as_deref() != Some(command.as_str())
+            let current = links::registry::current_command();
+            if !current
+                .as_deref()
+                .is_some_and(|c| links::is_marina_command(c, &exe))
             {
-                let mut updated = settings.clone();
-                updated.previous_link_command = Some(command);
-                let _ = state.settings_store.save(&updated);
-            }
-            if let Err(e) = links::registry::register(&exe) {
-                dsh_marina::applog::warn(&format!("重新注册 dsh:// 协议失败：{e}"));
+                if let Some(command) = current
+                    && settings.previous_link_command.as_deref() != Some(command.as_str())
+                {
+                    let mut updated = settings.clone();
+                    updated.previous_link_command = Some(command);
+                    let _ = state.settings_store.save(&updated);
+                }
+                if let Err(e) = links::registry::register(&exe) {
+                    dsh_marina::applog::warn(&format!("重新注册 dsh:// 协议失败：{e}"));
+                }
             }
         }
     }
@@ -394,6 +402,9 @@ fn create_tray(cx: &mut App) -> anyhow::Result<()> {
         .icon(icon)
         .tooltip(APP_TITLE)
         .menu(build_tray_menu)
+        // 注册激活回调后 gpui-tray 才把左键单击作为 Activated 事件派发，
+        // 否则左键会退回右键菜单。复用菜单"打开 DSH Marina"的同一条显示路径。
+        .on_activate_with(|_, cx| show_main_window(&ShowWindow, cx))
         .build(cx)?;
 
     dsh_marina::applog::info("托盘已构建，正在注册全局…");
@@ -543,11 +554,8 @@ fn handle_tray_command(command: &TrayCommand, cx: &mut App) {
 }
 
 fn raw_hwnd(window: &Window) -> Option<isize> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
-        _ => None,
-    }
+    use raw_window_handle::HasWindowHandle;
+    platform::native_window_handle(HasWindowHandle::window_handle(window).ok()?.as_raw())
 }
 
 /// Initial content of a new instance (design §7.2).
@@ -612,6 +620,9 @@ struct SwitchRuntimeDialog {
 }
 
 /// Dialog variants for various operations.
+// Only one dialog is alive at a time, so the largest variant's ~400 bytes are
+// not worth boxing every construction and match site.
+#[allow(clippy::large_enum_variant)]
 enum Dialog {
     NewInstance(NewInstanceDialog),
     SwitchRuntime(SwitchRuntimeDialog),
@@ -868,7 +879,15 @@ struct DownloadState {
 enum JobPhase {
     Downloading,
     Installing,
+    Paused,
 }
+
+/// Shared handles for a background download: progress, cancel and pause flags.
+type JobHandles = (
+    Arc<Mutex<(u64, u64)>>,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
 
 /// 「关于」里的检查更新：Marina 自身的最新版本。
 #[derive(Default)]
@@ -901,6 +920,7 @@ struct DownloadJob {
     /// `(downloaded, total)`.
     progress: Arc<Mutex<(u64, u64)>>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    pause: Arc<std::sync::atomic::AtomicBool>,
     phase: JobPhase,
     /// Recent `(time, downloaded)` samples for speed and ETA (§NFR-9).
     samples: std::cell::RefCell<std::collections::VecDeque<(std::time::Instant, u64)>>,
@@ -941,6 +961,9 @@ struct MarinaWindow {
     focus: FocusHandle,
     /// Starting/Stopping overrides while a background start/stop runs.
     pending: HashMap<String, InstanceStatus>,
+    /// Newly-created instances waiting on a runtime download (key → ids).
+    /// If that download is canceled, these instances are removed again.
+    awaiting_download: HashMap<String, Vec<String>>,
     /// Instances whose `cordis.patch.yml` is being rewritten right now.
     plugin_busy: std::collections::HashSet<String>,
     selected_instance: Option<String>,
@@ -952,6 +975,10 @@ struct MarinaWindow {
     tray_state: TrayIconState,
     /// Memory of each running instance's process tree, from the monitor.
     memory: HashMap<String, u64>,
+    /// Recent memory samples per instance for the home sparkline (newest last).
+    memory_history: HashMap<String, std::collections::VecDeque<u64>>,
+    /// Home dashboard instance-name filter.
+    home_search: Option<Entity<InputState>>,
     /// Disk usage of each instance directory, refreshed about once a minute.
     disk: HashMap<String, u64>,
     process_ids: HashMap<String, u32>,
@@ -1035,12 +1062,8 @@ struct PacksState {
     catalog: Option<Result<Vec<dsh_marina::catalog::CatalogEntry>, String>>,
     loading: bool,
     url_input: Option<Entity<InputState>>,
-    /// `(entry id, (done, total), cancel)` of the running download.
-    downloading: Option<(
-        String,
-        Arc<Mutex<(u64, u64)>>,
-        Arc<std::sync::atomic::AtomicBool>,
-    )>,
+    /// `(entry id, progress)` of the running download.
+    downloading: Option<(String, DownloadProgress)>,
     /// Pack being turned into an instance.
     importing: Option<String>,
     /// 已下载且校验通过的整合包 ID，列表渲染直接查这里。
@@ -1099,6 +1122,14 @@ enum DetailsTab {
 
 impl MarinaWindow {
     fn new(state: Arc<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Apply the persisted appearance before the first render.
+        ui::set_dark_mode(
+            state
+                .settings_store
+                .load()
+                .map(|s| s.dark_mode)
+                .unwrap_or(false),
+        );
         let custom_url = state
             .settings_store
             .load()
@@ -1138,14 +1169,25 @@ impl MarinaWindow {
                     break;
                 };
                 let state = monitor_state.clone();
-                let incoming = cx
+                let (incoming, show_requested) = cx
                     .background_executor()
                     .spawn(async move {
                         lifecycle::tick(&state, &ids);
-                        poll_links(&state)
+                        // A second launch on macOS asks the running instance to
+                        // surface its window through a request file.
+                        #[cfg(target_os = "macos")]
+                        let show = platform::take_show_request(state.repository.data_root());
+                        #[cfg(not(target_os = "macos"))]
+                        let show = false;
+                        (poll_links(&state), show)
                     })
                     .await;
                 let updated = this.update(cx, |this, cx| {
+                    if show_requested
+                        && let Some(hwnd) = cx.try_global::<MarinaApp>().and_then(|a| a.hwnd)
+                    {
+                        platform::show_window(hwnd);
+                    }
                     for url in incoming {
                         this.receive_link(url, cx);
                     }
@@ -1158,11 +1200,21 @@ impl MarinaWindow {
                     }
                     this.refresh_instances(cx);
                     cx.notify();
+                    // Adaptive cadence: poll fast while anything is running or
+                    // transitioning, slow down when the fleet is idle.
+                    this.instances.iter().any(|i| {
+                        matches!(
+                            this.statuses.get(&i.id),
+                            Some(InstanceStatus::Running | InstanceStatus::AdoptedRunning)
+                        )
+                    }) || !this.pending.is_empty()
                 });
-                if updated.is_err() {
+                let Ok(active) = updated else {
                     break;
-                }
-                cx.background_executor().timer(Duration::from_secs(2)).await;
+                };
+                cx.background_executor()
+                    .timer(Duration::from_secs(if active { 2 } else { 6 }))
+                    .await;
             }
         })
         .detach();
@@ -1176,6 +1228,7 @@ impl MarinaWindow {
             statuses: HashMap::new(),
             focus,
             pending: HashMap::new(),
+            awaiting_download: HashMap::new(),
             plugin_busy: std::collections::HashSet::new(),
             selected_instance: None,
             active_tab: DetailsTab::Overview,
@@ -1185,6 +1238,10 @@ impl MarinaWindow {
             dialog: None,
             tray_state: TrayIconState::Idle,
             memory: HashMap::new(),
+            memory_history: HashMap::new(),
+            home_search: Some(
+                cx.new(|cx| InputState::new(window, cx).placeholder("搜索实例名称…")),
+            ),
             disk: HashMap::new(),
             process_ids: HashMap::new(),
             runtime_disk: HashMap::new(),
@@ -1260,6 +1317,13 @@ impl MarinaWindow {
             })
             .collect();
         self.memory = lifecycle.memory.clone();
+        for (id, bytes) in &self.memory {
+            let hist = self.memory_history.entry(id.clone()).or_default();
+            hist.push_back(*bytes);
+            while hist.len() > 24 {
+                hist.pop_front();
+            }
+        }
         self.disk = lifecycle.disk.clone();
         self.process_ids = lifecycle.process_ids.clone();
         self.runtime_disk = lifecycle.runtime_disk.clone();
@@ -2544,6 +2608,16 @@ impl MarinaWindow {
             .map_err(|e| e.to_string())
             .and_then(|mut settings| {
                 apply(&mut settings);
+                ui::set_dark_mode(settings.dark_mode);
+                Theme::change(
+                    if settings.dark_mode {
+                        ThemeMode::Dark
+                    } else {
+                        ThemeMode::Light
+                    },
+                    None,
+                    cx,
+                );
                 store.save(&settings).map_err(|e| e.to_string())
             });
         let saved = match result {
@@ -3117,18 +3191,29 @@ impl MarinaWindow {
         title: String,
         total: u64,
         cx: &mut Context<Self>,
-    ) -> Option<(Arc<Mutex<(u64, u64)>>, Arc<std::sync::atomic::AtomicBool>)> {
-        if self.download.jobs.iter().any(|job| job.key == key) {
-            return None;
+    ) -> Option<JobHandles> {
+        if let Some(job) = self.download.jobs.iter_mut().find(|job| job.key == key) {
+            // A paused job can be resumed in place; an active one is a no-op.
+            if job.phase != JobPhase::Paused {
+                return None;
+            }
+            job.cancel
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            job.pause.store(false, std::sync::atomic::Ordering::Relaxed);
+            job.phase = JobPhase::Downloading;
+            cx.notify();
+            return Some((job.progress.clone(), job.cancel.clone(), job.pause.clone()));
         }
         let progress = Arc::new(Mutex::new((0u64, total)));
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let first = self.download.jobs.is_empty();
         self.download.jobs.push(DownloadJob {
             key,
             title,
             progress: progress.clone(),
             cancel: cancel.clone(),
+            pause: pause.clone(),
             phase: JobPhase::Downloading,
             samples: Default::default(),
         });
@@ -3159,7 +3244,7 @@ impl MarinaWindow {
             .detach();
         }
         cx.notify();
-        Some((progress, cancel))
+        Some((progress, cancel, pause))
     }
 
     fn finish_job(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -3171,8 +3256,45 @@ impl MarinaWindow {
     }
 
     fn cancel_job(&mut self, key: &str, cx: &mut Context<Self>) {
+        let paused = self
+            .download
+            .jobs
+            .iter()
+            .find(|job| job.key == key)
+            .is_some_and(|job| job.phase == JobPhase::Paused);
+        if paused {
+            // The worker already exited; clean the kept `.part` and the
+            // not-yet-installed instances ourselves.
+            if let Some(version) = key.strip_prefix("dsh:") {
+                let prefix = format!("dsh-{version}.");
+                for (path, _) in download::pending_partial_downloads(&self.state.registry) {
+                    if path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&prefix))
+                    {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+            for id in self.awaiting_download.remove(key).unwrap_or_default() {
+                if self.instances.iter().any(|i| i.id == id) {
+                    self.delete_instance(&id, storage::DeleteMode::Direct, cx);
+                }
+            }
+            self.finish_job(key, cx);
+            self.refresh_instances(cx);
+            return;
+        }
         if let Some(job) = self.download.jobs.iter().find(|job| job.key == key) {
             job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        cx.notify();
+    }
+
+    fn pause_job(&mut self, key: &str, cx: &mut Context<Self>) {
+        if let Some(job) = self.download.jobs.iter().find(|job| job.key == key) {
+            job.pause.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         cx.notify();
     }
@@ -3181,7 +3303,7 @@ impl MarinaWindow {
     fn download_runtime(&mut self, version: download::RemoteVersion, cx: &mut Context<Self>) {
         let key = format!("dsh:{}", version.version);
         let total = version.feed.as_ref().map(|f| f.size).unwrap_or(0);
-        let Some((progress, cancel)) =
+        let Some((progress, cancel, pause)) =
             self.push_job(key.clone(), format!("DSH {}", version.version), total, cx)
         else {
             return;
@@ -3189,6 +3311,7 @@ impl MarinaWindow {
         let state = self.state.clone();
         cx.spawn(async move |this, cx| {
             let worker_cancel = cancel.clone();
+            let worker_pause = pause.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -3208,13 +3331,29 @@ impl MarinaWindow {
                         &feed,
                         &state.registry,
                         &worker_cancel,
+                        &worker_pause,
                         &mut report,
                     )
                     .map_err(|e| e.to_string())
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                // A paused download keeps its job and `.part` for later resume.
+                let paused = this
+                    .download
+                    .jobs
+                    .iter()
+                    .find(|j| j.key == key)
+                    .is_some_and(|j| j.pause.load(std::sync::atomic::Ordering::Relaxed));
+                if paused {
+                    if let Some(job) = this.download.jobs.iter_mut().find(|j| j.key == key) {
+                        job.phase = JobPhase::Paused;
+                    }
+                    cx.notify();
+                    return;
+                }
                 this.finish_job(&key, cx);
+                let awaiting = this.awaiting_download.remove(&key).unwrap_or_default();
                 match result {
                     Ok(runtime) => {
                         this.last_success = Some(format!("DSH {} 已安装", runtime.version));
@@ -3223,7 +3362,21 @@ impl MarinaWindow {
                         this.suggest_runtime_cleanup(cx);
                     }
                     Err(_) if cancel.load(std::sync::atomic::Ordering::Relaxed) => {
-                        this.last_success = Some("已取消下载；下次可以继续".to_owned())
+                        // The download was canceled: remove any instance that
+                        // had been created waiting for it, so no broken
+                        // half-downloaded instance is left in the list.
+                        let had_pending = !awaiting.is_empty();
+                        for id in awaiting {
+                            // Skip ids the user already removed manually.
+                            if this.instances.iter().any(|i| i.id == id) {
+                                this.delete_instance(&id, storage::DeleteMode::Direct, cx);
+                            }
+                        }
+                        this.last_success = Some(if had_pending {
+                            "已取消下载，未下载完的实例已移除".to_owned()
+                        } else {
+                            "已取消下载，已清理未完成的文件".to_owned()
+                        });
                     }
                     Err(e) => this.last_error = Some(format!("下载或安装 DSH 失败：{e}")),
                 }
@@ -3433,29 +3586,16 @@ impl MarinaWindow {
         cx.notify();
     }
 
-    /// 下载新版 Marina 到数据目录，校验后留在那里等重启。
+    /// 下载新版 Marina 更新包到数据目录，SHA-256 校验后留在那里等重启。
     fn download_app_update(&mut self, cx: &mut Context<Self>) {
-        let Some(Dialog::Update {
-            version, release, ..
-        }) = self.dialog.as_ref()
-        else {
+        let Some(Dialog::Update { version, .. }) = self.dialog.as_ref() else {
             return;
         };
-        let Some(asset) = release.windows_exe().cloned() else {
-            if let Some(Dialog::Update { error, .. }) = self.dialog.as_mut() {
-                *error = Some("这个版本没有发布 Windows 可执行文件".to_owned());
-            }
-            cx.notify();
-            return;
-        };
-        let sha_url = release
-            .windows_exe_sha256()
-            .map(|asset| asset.browser_download_url.clone());
         let version = version.clone();
         let key = format!("marina:{version}");
-        let destination = dsh_marina::selfupdate::staged_exe(&self.state.data_root, &version);
-        let Some((progress, cancel)) =
-            self.push_job(key.clone(), format!("DSH Marina {version}"), asset.size, cx)
+        let data_root = self.state.data_root.clone();
+        let Some((progress, cancel, _pause)) =
+            self.push_job(key.clone(), format!("DSH Marina {version}"), 0, cx)
         else {
             return;
         };
@@ -3468,23 +3608,17 @@ impl MarinaWindow {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let sha = match sha_url {
-                        Some(url) => dsh_marina::selfupdate::fetch_sha256(&url).ok(),
-                        None => None,
-                    };
-                    let mut report = |p: download::DownloadProgress| {
+                    let update = dsh_marina::selfupdate::check()?
+                        .ok_or_else(|| "这个版本没有发布当前平台的更新包".to_owned())?;
+                    let mut report = |downloaded: u64, total: Option<u64>| {
                         if let Ok(mut slot) = progress.lock() {
-                            *slot = (p.downloaded, p.total.max(asset.size));
+                            *slot = (downloaded, total.unwrap_or(0));
                         }
                     };
-                    dsh_marina::selfupdate::download_verified(
-                        &asset.browser_download_url,
-                        &destination,
-                        sha.as_deref(),
-                        &cancel,
-                        &mut report,
-                    )
-                    .map(|()| destination.clone())
+                    let bytes = dsh_marina::selfupdate::download(&update, &mut report)?;
+                    let pending =
+                        dsh_marina::selfupdate::stage_pending(&data_root, &update, &bytes)?;
+                    Ok::<PathBuf, String>(pending.package_path(&data_root))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -3503,7 +3637,7 @@ impl MarinaWindow {
                             path,
                         });
                         this.dialog = Some(Dialog::UpdateReady { version });
-                        dsh_marina::applog::info("[Update] 新版本已下载并校验完成");
+                        dsh_marina::applog::info("[Update] 新版本已下载并通过 SHA-256 校验");
                     }
                     Err(e) => {
                         dsh_marina::applog::warn(&format!("[Update] 下载更新失败：{e}"));
@@ -3554,16 +3688,17 @@ impl MarinaWindow {
         cx.notify();
     }
 
-    /// Swap the executable and start the new build; instances stop first.
-    fn apply_update_now(&mut self, staged: PathBuf, cx: &mut Context<Self>) {
+    /// Install the staged package and restart; instances stop first.
+    fn apply_update_now(&mut self, _staged: PathBuf, cx: &mut Context<Self>) {
         self.last_success = Some("正在停止实例并重启到新版本…".to_owned());
         self.dialog = None;
         self.app_update.deferred = None;
         cx.notify();
+        let data_root = self.state.data_root.clone();
         perform_quit(
             StopMode::Graceful,
             Some(Box::new(move |_state: &AppState| {
-                dsh_marina::selfupdate::apply_and_restart(&staged)
+                dsh_marina::selfupdate::install_pending(&data_root)
             })),
             cx,
         );
@@ -4112,6 +4247,7 @@ impl MarinaWindow {
     /// Take over `dsh://` (saving the previous handler) or give it back.
     fn set_handle_links(&mut self, enabled: bool, cx: &mut Context<Self>) {
         let settings = self.state.settings_store.load().unwrap_or_default();
+        #[cfg(windows)]
         let result = platform::current_executable().and_then(|exe| {
             if enabled {
                 let previous = links::registry::current_command()
@@ -4122,6 +4258,13 @@ impl MarinaWindow {
                 links::registry::restore(settings.previous_link_command.as_deref()).map(|()| None)
             }
         });
+        // On macOS the protocol belongs to the app bundle; Marina only records
+        // the preference, there is no registry handler to swap.
+        #[cfg(not(windows))]
+        let result: Result<Option<String>, String> = {
+            let _ = &settings;
+            Ok(None)
+        };
         match result {
             Ok(previous) => {
                 self.update_settings(
@@ -4839,6 +4982,11 @@ impl MarinaWindow {
                             None => format!("已创建实例 {}", config.name),
                         });
                         if let Some(version) = download {
+                            let key = format!("dsh:{}", version.version);
+                            this.awaiting_download
+                                .entry(key)
+                                .or_default()
+                                .push(config.id.clone());
                             this.download_runtime(version, cx);
                         }
                         this.select_instance(config.id, cx);
@@ -4890,30 +5038,40 @@ fn main() {
             ));
         }
     }
-    let mut single_instance = platform::acquire_single_instance();
+    let mut single_instance = platform::acquire_single_instance(&data_root);
     if wait_pid.is_some() {
         // The mutex is released slightly after the process exits; retry briefly.
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while single_instance.is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(300));
-            single_instance = platform::acquire_single_instance();
+            single_instance = platform::acquire_single_instance(&data_root);
         }
     }
     let Some(_single_instance) = single_instance else {
-        platform::activate_window(APP_TITLE);
+        platform::activate_window(APP_TITLE, &data_root);
         return;
     };
+
+    // Surface a leftover legacy NSIS install (v0.1.x) so the new independent
+    // install does not silently orphan it. Removal stays user-driven.
+    #[cfg(windows)]
+    if let Some(legacy) = dsh_marina::legacy_install::detect()
+        && let Ok(exe) = platform::current_executable()
+        && let Some(exe_dir) = exe.parent()
+        && dsh_marina::legacy_install::is_separate_copy(&legacy, exe_dir)
+    {
+        dsh_marina::applog::info(&format!(
+            "检测到旧版安装（{}）位于 {}；新版已独立安装，可在「应用和功能」中卸载旧版 DSH Marina。",
+            legacy.version.as_deref().unwrap_or("未知版本"),
+            legacy.install_dir.display()
+        ));
+    }
 
     // Load backend state
     let state = Arc::new(AppState::new(&data_root));
     dsh_marina::i18n::init(&data_root);
-    // A previous update renamed the running exe to `.old`.  Keep it until this
-    // build has proven it starts, so a broken release can still be rolled back
-    // by renaming the file back.
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(20));
-        dsh_marina::selfupdate::cleanup_stale_backup();
-    });
+    // 上一轮更新若已生效（pending 版本不高于当前版本），清掉残留的更新包。
+    dsh_marina::selfupdate::cleanup_applied_pending(&data_root);
     dsh_marina::applog::info(&format!(
         "DSH Marina {} 已启动，数据目录 {}",
         env!("CARGO_PKG_VERSION"),
@@ -4954,7 +5112,21 @@ fn main() {
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx| {
             init(cx);
-            Theme::change(ThemeMode::Light, None, cx);
+            let dark = state
+                .settings_store
+                .load()
+                .map(|s| s.dark_mode)
+                .unwrap_or(false);
+            ui::set_dark_mode(dark);
+            Theme::change(
+                if dark {
+                    ThemeMode::Dark
+                } else {
+                    ThemeMode::Light
+                },
+                None,
+                cx,
+            );
 
             cx.set_global(MarinaApp {
                 state: state.clone(),

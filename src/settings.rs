@@ -74,6 +74,8 @@ pub struct MarinaSettings {
     pub pack_catalog_url: String,
     /// Check GitHub for a new Marina release once per launch.
     pub auto_check_update: bool,
+    /// Use the dark color theme.  Defaults to the light theme.
+    pub dark_mode: bool,
 }
 
 impl Default for MarinaSettings {
@@ -94,6 +96,7 @@ impl Default for MarinaSettings {
             default_link_instance: None,
             pack_catalog_url: DEFAULT_PACK_CATALOG_URL.to_owned(),
             auto_check_update: true,
+            dark_mode: false,
         }
     }
 }
@@ -166,6 +169,9 @@ struct UiSection {
     /// Off only when the user turns the launch-time check off.
     #[serde(skip_serializing_if = "is_true")]
     auto_check_update: Option<bool>,
+    /// On only when the user picks the dark theme; light is the default.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dark_mode: bool,
 }
 
 /// `skip_serializing_if` helper for options whose default is `true`.
@@ -230,6 +236,7 @@ impl SettingsFile {
                 self.packs.catalog_url
             },
             auto_check_update: self.ui.auto_check_update.unwrap_or(true),
+            dark_mode: self.ui.dark_mode,
         }
     }
 
@@ -252,6 +259,7 @@ impl SettingsFile {
             ui: UiSection {
                 minimize_to_tray_hint_shown: settings.tray_hint_shown,
                 auto_check_update: (!settings.auto_check_update).then_some(false),
+                dark_mode: settings.dark_mode,
             },
             links: LinksSection {
                 handle_links: settings.handle_links,
@@ -278,7 +286,8 @@ pub enum SettingsError {
     Parse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        // Boxed: toml::de::Error is large and would bloat every Result using this error.
+        source: Box<toml::de::Error>,
     },
     #[error("写入启动器设置失败：{0}")]
     Serialize(#[from] toml::ser::Error),
@@ -308,7 +317,7 @@ impl SettingsStore {
         })?;
         let file: SettingsFile = toml::from_str(&text).map_err(|source| SettingsError::Parse {
             path: self.path.clone(),
-            source,
+            source: Box::new(source),
         })?;
         Ok(file.into_settings())
     }
@@ -366,6 +375,7 @@ mod tests {
             previous_link_command: Some("\"C:\\DSH\\DeepSeek Harness.exe\" \"%1\"".to_owned()),
             default_link_instance: Some("work".to_owned()),
             pack_catalog_url: "https://example.com/packs/catalog.json".to_owned(),
+            dark_mode: true,
             ..MarinaSettings::default()
         };
         store.save(&settings).unwrap();
