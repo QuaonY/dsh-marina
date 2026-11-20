@@ -3,7 +3,7 @@
     {
       "browser_download_url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-setup-v0.1.3-windows-x64.exe",
       "name": "dsh-marina-setup-v0.1.3-windows-x64.exe",
-      "size": 9782316
+      "size": 9764862
     },
     {
       "browser_download_url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-setup-v0.1.3-windows-x64.exe.sha256",
@@ -15,13 +15,18 @@
   "html_url": "https://github.com/QuaonY/dsh-marina/releases/tag/v0.1.3",
   "notes": "This release adds a home dashboard, batch controls and download pause/resume.\n\n- Home dashboard: per-instance color bar, status dot, memory sparkline and live usage for running instances.\n- Home search box (filter by name) plus \"Start all / Stop all\" batch actions.\n- Global shortcuts: Ctrl/Cmd+N new instance, Ctrl/Cmd+, open settings.\n- Downloads support pause / resume: pausing keeps the partial file for resuming; only cancel cleans up.\n- Home empty-state guidance (brand mark + new-instance button).\n- Network clients reused per timeout; monitor polling adapts (idle 6s / active 2s).\n- Theme palette split into its own module.\n- Cancelling an unfinished download no longer leaves a broken instance in the list.\n\n中文\n\n本版新增首页仪表盘、批量操作与下载暂停/继续。\n\n- 首页仪表盘：实例色条、状态点、运行中实例的内存迷你曲线与实时占用。\n- 首页搜索框（按名称过滤）与「全部启动 / 全部停止」批量操作。\n- 全局快捷键：Ctrl/Cmd+N 新建实例，Ctrl/Cmd+, 打开设置。\n- 下载支持「暂停 / 继续」：暂停保留已下载部分可续传，取消才清理未完成文件与待装实例。\n- 首页空状态引导（品牌标识 + 新建实例按钮）。\n- 网络客户端按超时复用；监控轮询自适应降频（空闲 6s / 活跃 2s）。\n- 主题色板拆分为独立模块，便于维护。\n- 取消未完成的下载不再在实例列表留下损坏实例。\n",
   "platforms": {
+    "macos-aarch64": {
+      "format": "app",
+      "signature": "8b0a5e1ac384f4c9c7bc4f36d20e3ceea213ffeabcc071aafb9acecefe593af0",
+      "url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-v0.1.3-macos-aarch64.app.tar.gz"
+    },
     "windows-x86_64": {
       "format": "nsis",
-      "signature": "07e7d3270bf45ea0c3aa51f2357d7ee1785d4a4951cc045009cbabb194f366a8",
+      "signature": "ee10547bc2ec117cab8a9ff6f870c018feb2714dc6749733a83c1de183bd52dc",
       "url": "https://github.com/QuaonY/dsh-marina/releases/download/v0.1.3/dsh-marina-setup-v0.1.3-windows-x64.exe"
     }
   },
-  "pub_date": "2026-11-20T09:14:24Z",
+  "pub_date": "2026-11-20T10:04:38Z",
   "tag_name": "v0.1.3",
   "version": "0.1.3"
 }
