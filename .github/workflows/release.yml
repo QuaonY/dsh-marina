@@ -105,6 +105,17 @@ jobs:
           git commit -m "release: v${{ needs.check.outputs.version }} update.json" || exit 0
           git push origin HEAD:main
 
+      - name: Publish CNB Release (optional)
+        continue-on-error: true
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "未配置 CNB_TOKEN，跳过 CNB Release。"
+            exit 0
+          fi
+          cargo xtask cnb-release --tag "v${{ needs.check.outputs.version }}"
+
       - name: Sync CNB mirror (optional)
         env:
           CNB_GIT_TOKEN: ${{ secrets.CNB_GIT_TOKEN }}

@@ -215,8 +215,8 @@ cargo xtask manifest --tag v<版本> --notes CHANGELOG.md
 
 - Windows 产出 NSIS 安装器（更新包）+ 其 `.sha256`；macOS 产出 `.app.tar.gz`（更新包）+ `.dmg`（全新安装）。
 - `update.json` 兼容旧版清单：保留 `tag_name/html_url/body/assets` 供 v0.1.2 旧客户端读取，同时带上 `version/notes/pub_date/platforms` 供新版自更新使用。
-- 推送即全自动发布：`.github/workflows/release.yml` 双端打包、发 GitHub Release、把 `update.json` 提交回 main，并在配置 `CNB_GIT_TOKEN` 时同步 CNB。发版只需 bump `Cargo.toml` 版本 + 在 `CHANGELOG.md` 追加 `## <版本>` 章节（中英双语、最新在前）后推送，无其它手动步骤；流水线自动抽取该章节作为 Release 说明。
-- `.github/workflows/ci.yml` 在 PR 上做双端 fmt / clippy / test 门禁。两个工作流都不需要签名密钥；`CNB_GIT_TOKEN` 可选、仅用于 CNB 镜像。
+- 推送即全自动发布：`.github/workflows/release.yml` 双端打包、发 GitHub Release、把 `update.json` 提交回 main，并在配置 `CNB_GIT_TOKEN` 时同步 CNB 代码、配置 `CNB_TOKEN` 时在 CNB 创建 Release 并上传全部附件。发版只需 bump `Cargo.toml` 版本 + 在 `CHANGELOG.md` 追加 `## <版本>` 章节（中英双语、最新在前）后推送，无其它手动步骤；流水线自动抽取该章节作为 Release 说明。
+- `.github/workflows/ci.yml` 在 PR 上做双端 fmt / clippy / test 门禁。两个工作流都不需要签名密钥；`CNB_GIT_TOKEN` / `CNB_TOKEN` 可选、仅用于 CNB 镜像与 CNB Release。
 
 ## 开发
 

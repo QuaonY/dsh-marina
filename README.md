@@ -271,11 +271,12 @@ cargo xtask manifest --tag v<version> --notes CHANGELOG.md
 - `update.json` stays compatible with the old manifest: it keeps `tag_name/html_url/body/assets` for
   v0.1.2 clients and adds `version/notes/pub_date/platforms` for the new updater.
 - Release is fully automatic on push: `.github/workflows/release.yml` builds both platforms, publishes
-  the GitHub Release, commits `update.json` back to main and (with `CNB_GIT_TOKEN`) syncs CNB.
+  the GitHub Release, commits `update.json` back to main and (with `CNB_GIT_TOKEN`) syncs CNB code and
+  (with `CNB_TOKEN`) creates the CNB Release with all assets uploaded.
   Bump `Cargo.toml` version + append a `## <version>` section to `CHANGELOG.md` (bilingual, newest
   first), then push — nothing else is manual. The pipeline extracts that section as the Release body.
 - `.github/workflows/ci.yml` runs fmt / clippy / test on pull requests. Neither workflow needs secrets
-  for signing; `CNB_GIT_TOKEN` is optional and only used for the CNB mirror.
+  for signing; `CNB_GIT_TOKEN` / `CNB_TOKEN` are optional and only used for the CNB mirror / Release.
 
 ## Development
 

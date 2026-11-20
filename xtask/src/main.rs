@@ -12,10 +12,11 @@
 
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use cargo_packager::{Config, PackageFormat, PackageOutput, package};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -40,9 +41,13 @@ fn main() -> Result<()> {
             let notes = flag_value(&args, "--notes").context("manifest 需要 --notes <文件>")?;
             cmd_manifest(&root, &tag, Path::new(&notes))
         }
+        Some("cnb-release") => {
+            let tag = flag_value(&args, "--tag").context("cnb-release 需要 --tag v<版本>")?;
+            cmd_cnb_release(&root, &tag)
+        }
         _ => {
             println!(
-                "用法：\n  cargo xtask package [--skip-build]\n  cargo xtask manifest --tag v<版本> --notes <文件>"
+                "用法：\n  cargo xtask package [--skip-build]\n  cargo xtask manifest --tag v<版本> --notes CHANGELOG.md\n  cargo xtask cnb-release --tag v<版本>   # 需 CNB_TOKEN；把 Release+附件同步到 CNB"
             );
             Ok(())
         }
@@ -395,6 +400,133 @@ fn cmd_manifest(root: &Path, tag: &str, notes_file: &Path) -> Result<()> {
     println!(
         "update.json 已生成；推送到 main 后由 CI 自动发布并提交回 main（本工具不做 git 操作）。"
     );
+    Ok(())
+}
+
+/// CNB OpenAPI base（与 web 路径同构）。
+const CNB_API: &str = "https://api.cnb.cool";
+
+fn cnb_agent() -> Result<ureq::Agent> {
+    let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(600));
+    if let Ok(proxy) = env::var("HTTPS_PROXY").or_else(|_| env::var("https_proxy")) {
+        builder = builder.proxy(ureq::Proxy::new(&proxy).context("HTTPS_PROXY 地址无效")?);
+    }
+    Ok(builder.build())
+}
+
+/// 把当前版本的 Release 与全部附件同步到 CNB（CNB 仅作镜像，下载基址仍是 GitHub）。
+/// 需要 `CNB_TOKEN`（CNB 个人令牌，OpenAPI 权限）。本地缺的附件先从 GitHub Release 下载。
+fn cmd_cnb_release(root: &Path, tag: &str) -> Result<()> {
+    let token = env::var("CNB_TOKEN").context("需要 CNB_TOKEN（CNB 个人令牌）")?;
+    let auth = format!("Bearer {token}");
+    let version = tag.trim_start_matches('v');
+    let agent = cnb_agent()?;
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(root.join("update.json"))?)
+        .context("解析 update.json 失败")?;
+    let notes = manifest["body"].as_str().unwrap_or_default().to_owned();
+
+    let win_exe = format!("dsh-marina-setup-v{version}-windows-x64.exe");
+    let mac_tgz = format!("dsh-marina-v{version}-macos-aarch64.app.tar.gz");
+    let mac_dmg = format!("dsh-marina-v{version}-macos-aarch64.dmg");
+    let names = vec![
+        win_exe.clone(),
+        format!("{win_exe}.sha256"),
+        mac_tgz.clone(),
+        format!("{mac_tgz}.sha256"),
+        mac_dmg.clone(),
+        format!("{mac_dmg}.sha256"),
+        "update.json".to_owned(),
+    ];
+    let dist = root.join("dist");
+    fs::create_dir_all(&dist)?;
+    let local_path = |name: &str| -> PathBuf {
+        if name == "update.json" {
+            root.join("update.json")
+        } else {
+            dist.join(name)
+        }
+    };
+    for name in &names {
+        if name == "update.json" {
+            continue; // 用仓库根（CI 回写版）的 update.json
+        }
+        // 始终从 GitHub Release 拉取权威产物，保证 CNB 镜像与 GitHub 字节一致。
+        let local = local_path(name);
+        println!("拉取 GitHub 资产 {name} …");
+        let resp = agent
+            .get(&release_url(version, name))
+            .call()
+            .with_context(|| format!("下载 {name} 失败"))?;
+        let mut bytes = Vec::new();
+        resp.into_reader()
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("读取 {name} 流失败"))?;
+        fs::write(&local, &bytes)?;
+    }
+
+    let release_id = match agent
+        .get(&format!("{CNB_API}/{REPO}/-/releases/tags/{tag}"))
+        .set("Authorization", &auth)
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(resp) => resp
+            .into_json::<Value>()?
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        Err(ureq::Error::Status(404, _)) => {
+            let resp = agent
+                .post(&format!("{CNB_API}/{REPO}/-/releases"))
+                .set("Authorization", &auth)
+                .set("Accept", "application/json")
+                .send_json(json!({
+                    "tag_name": tag,
+                    "name": format!("DSH Marina {tag}"),
+                    "body": notes,
+                    "target_commitish": "main",
+                    "make_latest": "true",
+                }))
+                .context("创建 CNB Release 失败")?;
+            resp.into_json::<Value>()?
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        }
+        Err(e) => return Err(anyhow::anyhow!("查询 CNB Release 失败：{e}")),
+    };
+    ensure!(!release_id.is_empty(), "CNB Release id 为空");
+
+    for name in &names {
+        let local = local_path(name);
+        let size = fs::metadata(&local)?.len();
+        let resp = agent
+            .post(&format!(
+                "{CNB_API}/{REPO}/-/releases/{release_id}/asset-upload-url"
+            ))
+            .set("Authorization", &auth)
+            .set("Accept", "application/json")
+            .send_json(json!({ "asset_name": name, "size": size, "overwrite": true }))
+            .with_context(|| format!("申请 {name} 上传地址失败"))?;
+        let urls: Value = resp.into_json()?;
+        let upload_url = urls["upload_url"].as_str().context("缺少 upload_url")?;
+        let verify_url = urls["verify_url"].as_str().context("缺少 verify_url")?;
+        let bytes = fs::read(&local)?;
+        agent
+            .put(upload_url)
+            .send_bytes(&bytes)
+            .with_context(|| format!("上传 {name} 失败"))?;
+        agent
+            .post(verify_url)
+            .set("Authorization", &auth)
+            .set("Accept", "application/json")
+            .call()
+            .with_context(|| format!("确认 {name} 上传失败"))?;
+        println!("已上传 {name}（{size}B）");
+    }
+    println!("CNB Release {tag} 同步完成（{} 个附件）。", names.len());
     Ok(())
 }
 
