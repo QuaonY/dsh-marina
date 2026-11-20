@@ -30,6 +30,8 @@ struct LaunchSession {
     runtime_version: String,
     version_recorded: bool,
     marked_good: bool,
+    /// Captured at launch so tick never re-reads the config TOML.
+    stable_seconds: u64,
     /// This launch is the retry after an automatic rollback; never roll back twice.
     auto_retry: bool,
 }
@@ -60,6 +62,9 @@ pub struct Lifecycle {
     /// The "launched inside a Job" warning was shown once.
     breakaway_warned: bool,
     last_disk_scan: Option<Instant>,
+    /// Runtime sizes only change on install/remove, which invalidates them;
+    /// re-walking multi-GB runtime trees on every scan stalls the UI.
+    runtime_disk_fresh: bool,
 }
 
 pub type SharedLifecycle = Mutex<Lifecycle>;
@@ -197,6 +202,7 @@ fn launch_inner(
             runtime_version: runtime.version,
             version_recorded: false,
             marked_good: false,
+            stable_seconds: instance.safety.stable_seconds,
             auto_retry,
         },
     );
@@ -377,20 +383,14 @@ pub fn tick(state: &Arc<AppState>, instance_ids: &[String]) {
             {
                 probe.push((id.clone(), port, session.runtime_version.clone()));
             }
-            if !session.marked_good {
-                let threshold = state
-                    .repository
-                    .load(id)
-                    .map(|c| c.safety.stable_seconds)
-                    .unwrap_or(180);
-                if session.started.elapsed().as_secs() >= threshold {
-                    session.marked_good = true;
-                    stable.push((
-                        id.clone(),
-                        session.snapshot_id.clone(),
-                        session.runtime_version.clone(),
-                    ));
-                }
+            if !session.marked_good && session.started.elapsed().as_secs() >= session.stable_seconds
+            {
+                session.marked_good = true;
+                stable.push((
+                    id.clone(),
+                    session.snapshot_id.clone(),
+                    session.runtime_version.clone(),
+                ));
             }
         }
     }
@@ -860,33 +860,44 @@ pub fn copy_plugins(
     Ok(install_plugins(state, target).err())
 }
 
-/// Directory sizes are slow to compute, so refresh them at most once a minute.
+/// Directory sizes are slow to compute (instance roots hold Electron caches
+/// with tens of thousands of files), so refresh them at most every 5 minutes;
+/// the resulting disk storm otherwise stalls UI frames on every view.
 fn refresh_disk_usage(state: &AppState, instance_ids: &[String]) {
-    {
+    let runtime_stale = {
         let mut lifecycle = lock(state);
         if lifecycle
             .last_disk_scan
-            .is_some_and(|at| at.elapsed() < Duration::from_secs(60))
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(300))
         {
             return;
         }
         lifecycle.last_disk_scan = Some(Instant::now());
-    }
+        !lifecycle.runtime_disk_fresh
+    };
     let mut disk = HashMap::new();
     for id in instance_ids {
         if let Ok(paths) = state.repository.paths(id) {
             disk.insert(id.clone(), dsh_marina::storage::directory_size(&paths.root));
         }
     }
-    let runtime_disk = crate::maintenance::runtime_sizes(state)
-        .into_iter()
-        .collect();
+    // Walk runtime trees outside the lock: refresh_statuses waits on it.
+    let runtime_disk = runtime_stale.then(|| {
+        crate::maintenance::runtime_sizes(state)
+            .into_iter()
+            .collect::<HashMap<_, _>>()
+    });
     let mut lifecycle = lock(state);
+    if let Some(runtime_disk) = runtime_disk {
+        lifecycle.runtime_disk = runtime_disk;
+        lifecycle.runtime_disk_fresh = true;
+    }
     lifecycle.disk = disk;
-    lifecycle.runtime_disk = runtime_disk;
 }
 
 /// Force the next tick to recompute disk usage (after clone, import, delete).
 pub fn invalidate_disk_usage(state: &AppState) {
-    lock(state).last_disk_scan = None;
+    let mut lifecycle = lock(state);
+    lifecycle.last_disk_scan = None;
+    lifecycle.runtime_disk_fresh = false;
 }

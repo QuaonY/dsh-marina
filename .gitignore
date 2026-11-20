@@ -13,3 +13,35 @@
 # Legacy local key material; releases no longer sign, keep any such file out of the repo.
 *.sk
 marina-update-key*
+
+# Local development scratch: plans, notes, temp/backup files. Never publish these.
+/plans/
+/notes/
+/scratch/
+*.local.md
+*.local.toml
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.log
+
+# Editor / IDE / OS noise.
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local environment / credential material (beyond the key patterns above).
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx

@@ -1,6 +1,6 @@
 //! Instance deletion, directory accounting, trash retention, and uninstall support.
 
-use crate::instances::{InstancePaths, InstanceRepository};
+use crate::instances::{InstanceConfig, InstancePaths, InstanceRepository};
 use crate::packs;
 use crate::runtimes::RuntimeRegistry;
 use chrono::{DateTime, Duration, Utc};
@@ -11,6 +11,9 @@ use thiserror::Error;
 
 const TRASH_RETENTION_DAYS: i64 = 30;
 const TRASH_METADATA: &str = "trash.json";
+/// Snapshot of the instance config kept alongside `home/` so a restore can
+/// rebuild the original name, badge and runtime binding.
+const TRASH_CONFIG: &str = "instance.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteMode {
@@ -42,8 +45,24 @@ pub struct DeleteOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct TrashMetadata {
     instance_id: String,
+    /// Display name captured at deletion; older entries omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     deleted_at: String,
     expires_at: String,
+}
+
+/// One restorable entry in Marina's own 30-day trash directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashEntry {
+    /// Directory name under `trash/`; the stable key for restore/purge.
+    pub key: String,
+    pub instance_id: String,
+    pub name: String,
+    pub color: String,
+    pub deleted_at: String,
+    pub expires_at: String,
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Error)]
@@ -60,6 +79,12 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("找不到卸载程序：{0}")]
     MissingUninstaller(PathBuf),
+    #[error("恢复实例失败：{0}")]
+    Repository(#[from] crate::instances::RepositoryError),
+    #[error("找不到回收站条目：{0}")]
+    TrashNotFound(String),
+    #[error("无效的回收站条目")]
+    InvalidTrashKey,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -168,25 +193,7 @@ pub fn delete_instance(
             })
         }
         DeleteMode::KeepData => {
-            let timestamp = Utc::now().format("%Y%m%dT%H%M%S");
-            let id = paths.root.file_name().unwrap_or_default().to_string_lossy();
-            let trash_dir = repository
-                .data_root()
-                .join("trash")
-                .join(format!("{id}-{timestamp}"));
-            fs::create_dir_all(&trash_dir)?;
-            let home_target = trash_dir.join("home");
-            if paths.home.is_dir() {
-                fs::rename(&paths.home, &home_target)?;
-            }
-            let metadata = TrashMetadata {
-                instance_id: id.to_string(),
-                deleted_at: Utc::now().to_rfc3339(),
-                expires_at: (Utc::now() + Duration::days(TRASH_RETENTION_DAYS)).to_rfc3339(),
-            };
-            let text = serde_json::to_vec_pretty(&metadata)
-                .map_err(|error| StorageError::Io(std::io::Error::other(error.to_string())))?;
-            fs::write(trash_dir.join(TRASH_METADATA), text)?;
+            let trash_dir = move_to_trash(repository, paths)?;
             remove_instance_directory(paths)?;
             Ok(DeleteOutcome {
                 exported_to: None,
@@ -201,6 +208,42 @@ pub fn delete_instance(
             })
         }
     }
+}
+
+/// Move `home/` into `trash/<id>-<timestamp>/` together with a config snapshot
+/// and retention metadata.  The rest of the instance directory is left for the
+/// caller to dispose of, so this step is testable without the recycle bin.
+fn move_to_trash(
+    repository: &InstanceRepository,
+    paths: &InstancePaths,
+) -> Result<PathBuf, StorageError> {
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S");
+    let id = paths.root.file_name().unwrap_or_default().to_string_lossy();
+    let trash_dir = repository
+        .data_root()
+        .join("trash")
+        .join(format!("{id}-{timestamp}"));
+    fs::create_dir_all(&trash_dir)?;
+    let config = repository.load(&id).ok();
+    if let Some(config) = &config
+        && let Ok(text) = toml::to_string_pretty(config)
+    {
+        let _ = fs::write(trash_dir.join(TRASH_CONFIG), text);
+    }
+    let home_target = trash_dir.join("home");
+    if paths.home.is_dir() {
+        fs::rename(&paths.home, &home_target)?;
+    }
+    let metadata = TrashMetadata {
+        instance_id: id.to_string(),
+        name: config.as_ref().map(|config| config.name.clone()),
+        deleted_at: Utc::now().to_rfc3339(),
+        expires_at: (Utc::now() + Duration::days(TRASH_RETENTION_DAYS)).to_rfc3339(),
+    };
+    let text = serde_json::to_vec_pretty(&metadata)
+        .map_err(|error| StorageError::Io(std::io::Error::other(error.to_string())))?;
+    fs::write(trash_dir.join(TRASH_METADATA), text)?;
+    Ok(trash_dir)
 }
 
 fn remove_instance_directory(paths: &InstancePaths) -> Result<(), StorageError> {
@@ -243,6 +286,129 @@ pub fn cleanup_trash(data_root: &Path) -> Result<usize, StorageError> {
         }
     }
     Ok(removed)
+}
+
+/// Reject keys that could escape the `trash/` directory.
+fn validate_trash_key(key: &str) -> Result<(), StorageError> {
+    if key.is_empty() || key.contains("..") || key.contains(['/', '\\']) {
+        return Err(StorageError::InvalidTrashKey);
+    }
+    Ok(())
+}
+
+/// List the restorable entries in Marina's own trash, newest first.  Entries
+/// without readable metadata are skipped.  Walks `home/` for sizes, so call it
+/// off the UI thread.
+pub fn list_trash(data_root: &Path) -> Result<Vec<TrashEntry>, StorageError> {
+    let root = data_root.join("trash");
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let dir = entry.path();
+        let Some(metadata) = fs::read(dir.join(TRASH_METADATA))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<TrashMetadata>(&bytes).ok())
+        else {
+            continue;
+        };
+        let config = fs::read_to_string(dir.join(TRASH_CONFIG))
+            .ok()
+            .and_then(|text| toml::from_str::<InstanceConfig>(&text).ok());
+        let name = config
+            .as_ref()
+            .map(|config| config.name.clone())
+            .or(metadata.name.clone())
+            .unwrap_or_else(|| metadata.instance_id.clone());
+        let color = config
+            .as_ref()
+            .map(|config| config.color.clone())
+            .unwrap_or_else(|| "#0d6efd".to_owned());
+        entries.push(TrashEntry {
+            key: entry.file_name().to_string_lossy().into_owned(),
+            instance_id: metadata.instance_id,
+            name,
+            color,
+            deleted_at: metadata.deleted_at,
+            expires_at: metadata.expires_at,
+            size_bytes: directory_size(&dir.join("home")),
+        });
+    }
+    entries.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+    Ok(entries)
+}
+
+/// Recreate an instance from a kept trash entry: restore its config (or a blank
+/// fallback for legacy entries) and move `home/` back.  The original id is
+/// reused when free, otherwise a fresh one is minted.  The trash entry is
+/// removed on success.  Only `home/` survives deletion — login state and other
+/// directories went to the system recycle bin and are not recovered here.
+pub fn restore_trash(
+    repository: &InstanceRepository,
+    key: &str,
+) -> Result<InstanceConfig, StorageError> {
+    validate_trash_key(key)?;
+    let trash_dir = repository.data_root().join("trash").join(key);
+    if !trash_dir.is_dir() {
+        return Err(StorageError::TrashNotFound(key.to_owned()));
+    }
+    let saved = fs::read_to_string(trash_dir.join(TRASH_CONFIG))
+        .ok()
+        .and_then(|text| toml::from_str::<InstanceConfig>(&text).ok());
+    let metadata = fs::read(trash_dir.join(TRASH_METADATA))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<TrashMetadata>(&bytes).ok());
+    let mut config = match saved {
+        Some(config) => config,
+        None => {
+            let name = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.name.clone())
+                .or_else(|| {
+                    metadata
+                        .as_ref()
+                        .map(|metadata| metadata.instance_id.clone())
+                })
+                .unwrap_or_else(|| "恢复的实例".to_owned());
+            InstanceConfig::new_blank(name)
+        }
+    };
+    let id_taken = repository
+        .paths(&config.id)
+        .map(|paths| paths.root.exists())
+        .unwrap_or(false);
+    if id_taken {
+        config.id = InstanceConfig::new_blank(config.name.clone()).id;
+    }
+    config.validate()?;
+    let created = repository.create(config)?;
+    let paths = repository.paths(&created.id)?;
+    let home_source = trash_dir.join("home");
+    if home_source.is_dir() {
+        fs::remove_dir_all(&paths.home)?;
+        if fs::rename(&home_source, &paths.home).is_err() {
+            copy_directory(&home_source, &paths.home)?;
+            fs::remove_dir_all(&home_source)?;
+        }
+    }
+    let _ = fs::remove_dir_all(&trash_dir);
+    Ok(created)
+}
+
+/// Permanently remove one trash entry (the user confirmed this is irreversible).
+pub fn purge_trash_entry(data_root: &Path, key: &str) -> Result<(), StorageError> {
+    validate_trash_key(key)?;
+    let dir = data_root.join("trash").join(key);
+    if !dir.is_dir() {
+        return Err(StorageError::TrashNotFound(key.to_owned()));
+    }
+    fs::remove_dir_all(&dir)?;
+    Ok(())
 }
 
 pub fn uninstall_stats(
@@ -470,6 +636,7 @@ mod tests {
         fs::create_dir_all(&current).unwrap();
         let old_metadata = TrashMetadata {
             instance_id: "old".into(),
+            name: None,
             deleted_at: "2020-01-01T00:00:00Z".into(),
             expires_at: "2020-01-31T00:00:00Z".into(),
         };
@@ -480,6 +647,7 @@ mod tests {
         .unwrap();
         let new_metadata = TrashMetadata {
             instance_id: "new".into(),
+            name: None,
             deleted_at: Utc::now().to_rfc3339(),
             expires_at: (Utc::now() + Duration::days(30)).to_rfc3339(),
         };
@@ -492,5 +660,151 @@ mod tests {
         assert_eq!(cleanup_trash(root.path()).unwrap(), 1);
         assert!(!expired.exists());
         assert!(current.exists());
+    }
+
+    /// Move an instance's home into the trash and recycle the rest, without
+    /// touching the real system recycle bin; returns the trash key.
+    fn keep_instance(repository: &InstanceRepository, name: &str) -> (InstanceConfig, String) {
+        let config = repository.create_blank(name).unwrap();
+        let paths = repository.paths(&config.id).unwrap();
+        fs::write(paths.home.join("marker.txt"), b"data").unwrap();
+        let trash_dir = move_to_trash(repository, &paths).unwrap();
+        fs::remove_dir_all(&paths.root).unwrap();
+        let key = trash_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        (config, key)
+    }
+
+    #[test]
+    fn keep_data_saves_a_config_snapshot_and_lists_the_entry() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let mut config = repository.create_blank("工作区").unwrap();
+        config.color = "#1f9d6b".into();
+        repository.save(&config).unwrap();
+        let paths = repository.paths(&config.id).unwrap();
+        fs::write(paths.home.join("marker.txt"), b"data").unwrap();
+
+        let trash_dir = move_to_trash(&repository, &paths).unwrap();
+
+        assert!(trash_dir.join(TRASH_CONFIG).is_file());
+        assert!(trash_dir.join("home/marker.txt").is_file());
+        let entries = list_trash(root.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "工作区");
+        assert_eq!(entries[0].color, "#1f9d6b");
+        assert_eq!(entries[0].instance_id, config.id);
+        assert!(entries[0].size_bytes > 0);
+    }
+
+    #[test]
+    fn restore_rebuilds_the_instance_with_its_home_data_and_original_id() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let (config, key) = keep_instance(&repository, "工作区");
+
+        let restored = restore_trash(&repository, &key).unwrap();
+
+        assert_eq!(restored.id, config.id);
+        assert_eq!(restored.name, "工作区");
+        let paths = repository.paths(&restored.id).unwrap();
+        assert_eq!(fs::read(paths.home.join("marker.txt")).unwrap(), b"data");
+        assert!(paths.electron.is_dir());
+        assert!(!repository.data_root().join("trash").join(&key).exists());
+        assert!(list_trash(root.path()).unwrap().is_empty());
+        assert_eq!(repository.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn restore_mints_a_new_id_when_the_original_is_taken() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let (config, key) = keep_instance(&repository, "工作区");
+        let mut squat = InstanceConfig::new_blank("占用者");
+        squat.id = config.id.clone();
+        repository.create(squat).unwrap();
+
+        let restored = restore_trash(&repository, &key).unwrap();
+
+        assert_ne!(restored.id, config.id);
+        assert_eq!(restored.name, "工作区");
+        assert!(
+            repository
+                .paths(&restored.id)
+                .unwrap()
+                .home
+                .join("marker.txt")
+                .is_file()
+        );
+        assert_eq!(repository.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn restore_falls_back_to_a_blank_instance_for_legacy_entries() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let key = "legacy-20200101T000000";
+        let trash_dir = root.path().join("trash").join(key);
+        fs::create_dir_all(trash_dir.join("home")).unwrap();
+        fs::write(trash_dir.join("home/marker.txt"), b"old").unwrap();
+        let metadata = TrashMetadata {
+            instance_id: "legacy".into(),
+            name: None,
+            deleted_at: Utc::now().to_rfc3339(),
+            expires_at: (Utc::now() + Duration::days(30)).to_rfc3339(),
+        };
+        fs::write(
+            trash_dir.join(TRASH_METADATA),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        let restored = restore_trash(&repository, key).unwrap();
+
+        assert_eq!(restored.name, "legacy");
+        assert!(
+            repository
+                .paths(&restored.id)
+                .unwrap()
+                .home
+                .join("marker.txt")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn purge_removes_only_the_selected_entry() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        let (_, first) = keep_instance(&repository, "甲");
+        let (_, second) = keep_instance(&repository, "乙");
+        assert_eq!(list_trash(root.path()).unwrap().len(), 2);
+
+        purge_trash_entry(root.path(), &first).unwrap();
+
+        let remaining = list_trash(root.path()).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].key, second);
+    }
+
+    #[test]
+    fn rejects_unsafe_or_missing_trash_keys() {
+        let root = tempdir().unwrap();
+        let repository = InstanceRepository::new(root.path());
+        assert!(matches!(
+            restore_trash(&repository, "../escape"),
+            Err(StorageError::InvalidTrashKey)
+        ));
+        assert!(matches!(
+            purge_trash_entry(root.path(), "a/b"),
+            Err(StorageError::InvalidTrashKey)
+        ));
+        assert!(matches!(
+            restore_trash(&repository, "missing"),
+            Err(StorageError::TrashNotFound(_))
+        ));
     }
 }

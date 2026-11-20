@@ -288,3 +288,36 @@ pub fn total_physical_memory() -> u64 {
     };
     if rc == 0 { mem } else { 0 }
 }
+
+/// Available physical RAM in bytes (0 if the query fails).
+///
+/// "Available" is approximated as free + inactive + speculative + purgeable
+/// pages: the reclaimable memory the system can hand out without swapping.
+// mach_host_self is deprecated in libc (mach2 preferred); cache the host port
+// once so a read-only stat query needs no new dependency and no per-call port.
+#[allow(deprecated)]
+pub fn available_physical_memory() -> u64 {
+    static HOST: std::sync::OnceLock<libc::mach_port_t> = std::sync::OnceLock::new();
+    let host = *HOST.get_or_init(|| unsafe { libc::mach_host_self() });
+    let mut stats: libc::vm_statistics64_data_t = unsafe { std::mem::zeroed() };
+    let mut count = (std::mem::size_of::<libc::vm_statistics64_data_t>()
+        / std::mem::size_of::<libc::integer_t>())
+        as libc::mach_msg_type_number_t;
+    let rc = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            (&mut stats as *mut libc::vm_statistics64_data_t).cast(),
+            &mut count,
+        )
+    };
+    if rc != 0 {
+        return 0;
+    }
+    let page_size = unsafe { libc::vm_page_size } as u64;
+    let pages = stats.free_count as u64
+        + stats.inactive_count as u64
+        + stats.speculative_count as u64
+        + stats.purgeable_count as u64;
+    pages.saturating_mul(page_size)
+}

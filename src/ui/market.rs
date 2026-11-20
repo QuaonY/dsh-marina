@@ -154,16 +154,6 @@ impl MarinaWindow {
             .collect()
     }
 
-    /// The DSH version an instance runs, when it can be resolved.
-    pub(super) fn instance_dsh_version(&self, instance: &InstanceConfig) -> Option<String> {
-        let settings = self.state.runtime_store.load().unwrap_or_default();
-        self.state
-            .registry
-            .resolve(&instance.runtime.dsh_version, &settings)
-            .ok()
-            .map(|r| r.version)
-    }
-
     pub(super) fn market_plugin(&self, index: usize) -> Option<&MarketPlugin> {
         self.market.index.as_ref()?.plugins.get(index)
     }
@@ -193,8 +183,52 @@ impl MarinaWindow {
             .clone()
             .filter(|id| usable.iter().any(|i| &i.id == id))
             .or_else(|| (usable.len() == 1).then(|| usable[0].id.clone()));
-        self.dialog = Some(Dialog::MarketInstall { index, target });
+        self.dialog = Some(Dialog::MarketInstall {
+            index,
+            target,
+            versions: None,
+        });
         cx.notify();
+        // Resolving versions reads runtime settings and scans runtimes; do it
+        // once in the background instead of per instance per render frame.
+        let state = self.state.clone();
+        let bindings: Vec<(String, String)> = self
+            .instances
+            .iter()
+            .map(|i| (i.id.clone(), i.runtime.dsh_version.clone()))
+            .collect();
+        cx.spawn(async move |this, cx| {
+            let versions = cx
+                .background_executor()
+                .spawn(async move {
+                    let settings = state.runtime_store.load().unwrap_or_default();
+                    bindings
+                        .into_iter()
+                        .map(|(id, binding)| {
+                            let version = state
+                                .registry
+                                .resolve(&binding, &settings)
+                                .ok()
+                                .map(|r| r.version);
+                            (id, version)
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(Dialog::MarketInstall {
+                    index: open,
+                    versions: slot,
+                    ..
+                }) = this.dialog.as_mut()
+                    && *open == index
+                {
+                    *slot = Some(versions);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn install_market_plugin(

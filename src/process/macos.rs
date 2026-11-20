@@ -117,18 +117,35 @@ fn group_stats(process_id: u32) -> (u64, u32) {
 
 /// Resident memory of a process tree (adopted processes are not group leaders).
 fn tree_stats(root_process_id: u32) -> (u64, u32) {
-    let descendants = descendant_process_ids(root_process_id);
+    // One ps call covers both the ppid walk and the RSS sum; spawning a second
+    // ps per monitor tick doubles the process-creation cost for nothing.
+    let entries: Vec<(u32, u32, u64)> = ps_lines(&["-axo", "pid=,ppid=,rss="])
+        .into_iter()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let pid = parts.next()?.parse().ok()?;
+            let ppid = parts.next()?.parse().ok()?;
+            let rss_kb = parts.next()?.parse().ok()?;
+            Some((pid, ppid, rss_kb))
+        })
+        .collect();
+    let mut members = std::collections::HashSet::new();
+    members.insert(root_process_id);
+    loop {
+        let mut added = false;
+        for (pid, ppid, _) in &entries {
+            if members.contains(ppid) && members.insert(*pid) {
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
     let mut memory = 0u64;
     let mut count = 0u32;
-    for line in ps_lines(&["-axo", "pid=,rss="]) {
-        let mut parts = line.split_whitespace();
-        let Some(pid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(rss_kb) = parts.next().and_then(|p| p.parse::<u64>().ok()) else {
-            continue;
-        };
-        if pid == root_process_id || descendants.contains(&pid) {
+    for (pid, _, rss_kb) in &entries {
+        if members.contains(pid) {
             memory = memory.saturating_add(rss_kb * 1024);
             count += 1;
         }

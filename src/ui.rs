@@ -122,6 +122,7 @@ mod packs;
 mod settings;
 mod tabs;
 mod theme;
+mod trash;
 
 pub(crate) use settings::THIRD_PARTY_LICENSES;
 pub(crate) use theme::{DARK, LIGHT, Theme};
@@ -865,7 +866,8 @@ fn progress_ring(size: f32, ratio: f32) -> impl IntoElement {
 }
 
 /// Everything the details pane reads from disk for one render.
-struct DetailsData {
+#[derive(Clone)]
+pub(crate) struct DetailsData {
     paths: Option<InstancePaths>,
     plugins: Vec<PluginInfo>,
     snapshots: Vec<SnapshotInfo>,
@@ -1570,12 +1572,23 @@ impl MarinaWindow {
         // Physical RAM is constant for the process lifetime; query it once.
         static SYSTEM_MEM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
         let system_memory = *SYSTEM_MEM.get_or_init(dsh_marina::platform::total_physical_memory);
-        // The bar reflects real memory pressure (instance sum / physical RAM),
-        // not the fraction of instances that happen to be running.
+        // Available RAM is a cheap kernel stat (no disk), so read it live each
+        // render to reflect real system pressure, including the OS and other apps.
+        let available_memory = dsh_marina::platform::available_physical_memory();
+        // With a valid available figure, show whole-system usage so the gauge
+        // never reads a misleading 0 while the computer itself is using memory.
+        // Otherwise (unsupported platform / failed query) fall back to the
+        // instance sum, which is all we can measure there.
+        let show_system = system_memory > 0 && available_memory > 0;
+        let used_memory = if show_system {
+            system_memory.saturating_sub(available_memory)
+        } else {
+            total_memory
+        };
         let ratio = if system_memory == 0 {
             0.
         } else {
-            (total_memory as f32 / system_memory as f32).clamp(0., 1.)
+            (used_memory as f32 / system_memory as f32).clamp(0., 1.)
         };
         let data_root = self.state.repository.data_root().display().to_string();
 
@@ -1665,6 +1678,57 @@ impl MarinaWindow {
             cx.listener(|this, _, window, cx| this.open_new_dialog(window, cx)),
         );
 
+        // Compact trash entry above the memory footer; opens the dedicated page.
+        let trash_count = self.cached_trash(cx).len();
+        let trash_active = self.active_view == View::Trash;
+        let trash_link = clickable(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .mx(px(10.))
+                .mb(px(8.))
+                .px(px(12.))
+                .py(px(7.))
+                .rounded(px(8.))
+                .text_size(px(12.5))
+                .font_weight(if trash_active {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::MEDIUM
+                })
+                .when(trash_active, |el| {
+                    el.bg(rgb(t!(PRIMARY_MUTED))).text_color(rgb(t!(PRIMARY)))
+                })
+                .when(!trash_active, |el| {
+                    el.text_color(rgb(t!(TEXT_2)))
+                        .hover(|s| s.bg(rgb(t!(BG_HOVER))))
+                })
+                .child(svg().path("icons/trash.svg").size(px(13.)).text_color(rgb(
+                    if trash_active {
+                        t!(PRIMARY)
+                    } else {
+                        t!(TEXT_3)
+                    },
+                )))
+                .child(tr("回收站"))
+                .child(div().flex_1())
+                .when(trash_count > 0, |el| {
+                    el.child(
+                        div()
+                            .px(px(6.))
+                            .py(px(1.))
+                            .rounded(px(6.))
+                            .bg(rgb(t!(BG_ELEVATED)))
+                            .text_size(px(11.))
+                            .text_color(rgb(t!(TEXT_2)))
+                            .child(format!("{trash_count}")),
+                    )
+                }),
+            true,
+            cx.listener(|this, _, window, cx| this.show_view(View::Trash, window, cx)),
+        );
+
         div()
             .flex()
             .flex_col()
@@ -1715,6 +1779,7 @@ impl MarinaWindow {
                     .children(items)
                     .overflow_y_scrollbar(),
             )
+            .child(trash_link)
             .child(
                 div()
                     .flex()
@@ -1732,17 +1797,21 @@ impl MarinaWindow {
                             .items_center()
                             .justify_between()
                             .gap(px(4.))
-                            .child("实例内存")
+                            .child(if show_system {
+                                "内存"
+                            } else {
+                                "实例内存"
+                            })
                             .child(
                                 div()
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(rgb(t!(TEXT)))
                                     .child(if system_memory == 0 {
-                                        storage::format_bytes(total_memory)
+                                        storage::format_bytes(used_memory)
                                     } else {
                                         format!(
                                             "{} / {}",
-                                            storage::format_bytes(total_memory),
+                                            storage::format_bytes(used_memory),
                                             storage::format_bytes(system_memory)
                                         )
                                     }),
@@ -1757,6 +1826,14 @@ impl MarinaWindow {
                             .overflow_hidden()
                             .child(div().h_full().w(relative(ratio)).bg(rgb(t!(PRIMARY)))),
                     )
+                    .when(show_system, |el| {
+                        el.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(t!(TEXT_3)))
+                                .child(format!("其中实例 {}", storage::format_bytes(total_memory))),
+                        )
+                    })
                     .child(
                         div()
                             .id("sidebar-data-root")
@@ -1901,6 +1978,7 @@ impl MarinaWindow {
             View::Home => self.render_home(cx),
             View::Market => self.render_market(cx),
             View::Packs => self.render_packs(cx),
+            View::Trash => self.render_trash(cx),
             View::InstanceDetails => match self
                 .selected_instance
                 .as_deref()
@@ -1920,33 +1998,98 @@ impl MarinaWindow {
             .child(content)
     }
 
+    /// Cache-only read: the render path must never touch the disk, otherwise a
+    /// slow disk (e.g. the periodic size scan) stalls every frame. Misses return
+    /// empty data and are filled by [`Self::warm_details`] in the background.
     fn load_details(&self, instance: &InstanceConfig, status: &InstanceStatus) -> DetailsData {
-        let paths = self.state.repository.paths(&instance.id).ok();
-        let plugins = paths
-            .as_ref()
-            .and_then(|p| list_plugins(&p.home).ok())
-            .unwrap_or_default();
-        let snapshots = paths
-            .as_ref()
-            .and_then(|p| SnapshotStore::new(&p.root).list().ok())
-            .unwrap_or_default();
-        let history = paths
-            .as_ref()
-            .and_then(|p| LaunchHistoryStore::new(&p.root).list().ok())
-            .unwrap_or_default();
-        let crash = (*status == InstanceStatus::Crashed).then(|| history.last().cloned());
-        DetailsData {
-            paths,
-            plugins,
-            snapshots,
-            history,
-            crash,
+        if let Some((id, _, cached)) = self.details_cache.borrow().as_ref()
+            && id == &instance.id
+        {
+            let mut data = cached.clone();
+            data.crash = (*status == InstanceStatus::Crashed).then(|| data.history.last().cloned());
+            return data;
         }
+        DetailsData {
+            paths: None,
+            plugins: Vec::new(),
+            snapshots: Vec::new(),
+            history: Vec::new(),
+            crash: None,
+        }
+    }
+
+    /// Fill the details + log caches off the main thread.
+    fn warm_details(&self, id: String, cx: &mut Context<Self>) {
+        if self.warming.get() {
+            return;
+        }
+        self.warming.set(true);
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move {
+                    let paths = state.repository.paths(&id).ok();
+                    let plugins = paths
+                        .as_ref()
+                        .and_then(|p| list_plugins(&p.home).ok())
+                        .unwrap_or_default();
+                    let snapshots = paths
+                        .as_ref()
+                        .and_then(|p| SnapshotStore::new(&p.root).list().ok())
+                        .unwrap_or_default();
+                    let history = paths
+                        .as_ref()
+                        .and_then(|p| LaunchHistoryStore::new(&p.root).list().ok())
+                        .unwrap_or_default();
+                    let log_path = paths.as_ref().and_then(|p| latest_log(&p.marina));
+                    let entries = log_path
+                        .as_ref()
+                        .and_then(|p| tail(p, tabs::LOG_LINES).ok())
+                        .unwrap_or_default();
+                    (id, paths, plugins, snapshots, history, log_path, entries)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let (id, paths, plugins, snapshots, history, log_path, entries) = loaded;
+                *this.details_cache.borrow_mut() = Some((
+                    id,
+                    std::time::Instant::now(),
+                    DetailsData {
+                        paths,
+                        plugins,
+                        snapshots,
+                        history,
+                        crash: None,
+                    },
+                ));
+                if let Some(path) = log_path {
+                    *this.logs_cache.borrow_mut() =
+                        Some((path, std::time::Instant::now(), std::rc::Rc::new(entries)));
+                }
+                this.warming.set(false);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn render_details(&self, instance: &InstanceConfig, cx: &mut Context<Self>) -> Div {
         let status = self.get_instance_status(&instance.id);
         let data = self.load_details(instance, &status);
+        // TTL refresh in place: keep showing the old data while the background
+        // re-read runs, and do nothing at all when the details view is closed.
+        let stale = self
+            .details_cache
+            .borrow()
+            .as_ref()
+            .map(|(id, at, _)| {
+                id != &instance.id || at.elapsed() > std::time::Duration::from_secs(2)
+            })
+            .unwrap_or(true);
+        if stale {
+            self.warm_details(instance.id.clone(), cx);
+        }
 
         let mut pane = div()
             .flex()

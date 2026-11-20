@@ -41,6 +41,12 @@ pub fn total_physical_memory() -> u64 {
     0
 }
 
+/// Available physical RAM in bytes; unsupported platforms report 0.
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn available_physical_memory() -> u64 {
+    0
+}
+
 /// Extract the native window handle GPUI exposes, as a raw pointer value.
 /// Windows: `HWND`.  macOS: the `NSView *` (its `window` gives the `NSWindow`).
 pub fn native_window_handle(handle: raw_window_handle::RawWindowHandle) -> Option<isize> {

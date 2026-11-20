@@ -8,10 +8,11 @@ use crate::runtime::RuntimeSettings;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use thiserror::Error;
 
 pub const LATEST_STABLE: &str = "latest-stable";
@@ -25,6 +26,9 @@ pub const DSH_EXECUTABLE_NAME: &str = "DeepSeek Harness";
 pub const DSH_BUNDLE_NAME: &str = "DeepSeek Harness.app";
 const RUNTIME_METADATA_FILE: &str = "marina-runtime.json";
 const MAX_ASAR_HEADER_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Parsed asar versions keyed by path, with the mtime + size they were read at.
+type AsarVersionCache = HashMap<PathBuf, (SystemTime, u64, Option<String>)>;
 
 /// Path of the DSH executable inside a runtime version directory.
 ///
@@ -561,6 +565,33 @@ pub fn read_dsh_version(executable: &Path) -> Option<String> {
 }
 
 pub fn read_asar_package_version(asar: &Path) -> Option<String> {
+    // The directory index is several MB of JSON; parsing it per call stalls
+    // callers on hot paths. Cache by path, invalidated by mtime + size.
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<AsarVersionCache>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+    let stamp = fs::metadata(asar)
+        .ok()
+        .and_then(|m| m.modified().ok().map(|mtime| (mtime, m.len())));
+    if let Some((mtime, len)) = &stamp {
+        let cache = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((cached_mtime, cached_len, version)) = cache.get(asar)
+            && cached_mtime == mtime
+            && cached_len == len
+        {
+            return version.clone();
+        }
+    }
+    let version = parse_asar_package_version(asar);
+    if let Some((mtime, len)) = stamp {
+        CACHE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(asar.to_path_buf(), (mtime, len, version.clone()));
+    }
+    version
+}
+
+fn parse_asar_package_version(asar: &Path) -> Option<String> {
     let mut file = fs::File::open(asar).ok()?;
     let mut header = [0u8; 16];
     file.read_exact(&mut header).ok()?;
@@ -744,6 +775,42 @@ mod tests {
             read_asar_package_version(&asar).as_deref(),
             Some("0.2.1-rc.5")
         );
+    }
+
+    fn asar_bytes(version: &str) -> Vec<u8> {
+        let package = format!(r#"{{"version":"{version}"}}"#);
+        let index = format!(
+            r#"{{"files":{{"package.json":{{"size":{},"offset":"0"}}}}}}"#,
+            package.len()
+        );
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&((index.len() + 8) as u32).to_le_bytes());
+        bytes.extend_from_slice(&((index.len() + 4) as u32).to_le_bytes());
+        bytes.extend_from_slice(&(index.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(index.as_bytes());
+        bytes.extend_from_slice(package.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn asar_version_cache_serves_repeats_and_refreshes_on_replacement() {
+        let root = tempdir().unwrap();
+        let asar = root.path().join("app.asar");
+        fs::write(&asar, asar_bytes("0.2.1-rc.5")).unwrap();
+        assert_eq!(
+            read_asar_package_version(&asar).as_deref(),
+            Some("0.2.1-rc.5")
+        );
+        // Second call is served from the cache.
+        assert_eq!(
+            read_asar_package_version(&asar).as_deref(),
+            Some("0.2.1-rc.5")
+        );
+        // A replaced archive (different size, so the stamp differs even if the
+        // filesystem timestamp granularity is coarse) must be re-parsed.
+        fs::write(&asar, asar_bytes("0.3.0")).unwrap();
+        assert_eq!(read_asar_package_version(&asar).as_deref(), Some("0.3.0"));
     }
 
     fn managed(version: &str, installed_at: Option<&str>) -> RuntimeInfo {

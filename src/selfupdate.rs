@@ -12,6 +12,7 @@
 //! updater schema 以保持兼容。清单同时保留旧版 `tag_name/html_url/body/assets`。
 //! 安全边界：SHA-256 防传输损坏与 CDN 篡改，但不防仓库本身被攻破（那需要离线签名）。
 
+use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -76,15 +77,30 @@ pub fn check() -> Result<Option<Update>, String> {
 }
 
 /// 下载更新包并校验 SHA-256，返回字节。`progress` 收到（累计已下载, 总大小）。
+/// `cancel` 置位时尽快中断并返回 Err（已取消）。
 /// 期望哈希取自清单 `signature` 字段（现承载 SHA-256 hex）。
 pub fn download(
     update: &Update,
     progress: &mut dyn FnMut(u64, Option<u64>),
+    cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<Vec<u8>, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
+    let mut builder = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(600));
+    if let Ok(proxy) = env::var("HTTPS_PROXY")
+        .or_else(|_| env::var("https_proxy"))
+        .or_else(|_| env::var("HTTP_PROXY"))
+        .or_else(|_| env::var("http_proxy"))
+    {
+        let proxy = reqwest::Proxy::all(&proxy).map_err(|e| format!("代理地址无效：{e}"))?;
+        builder = builder.proxy(proxy);
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("初始化下载客户端失败：{e}"))?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("下载已取消".into());
+    }
     let mut response = client
         .get(update.download_url.as_str())
         .send()
@@ -96,6 +112,9 @@ pub fn download(
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 64 * 1024];
     loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("下载已取消".into());
+        }
         let n = response
             .read(&mut chunk)
             .map_err(|e| format!("读取更新流失败：{e}"))?;

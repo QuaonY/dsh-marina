@@ -3,7 +3,7 @@
 use super::*;
 
 /// Log panel length (design §9 列表虚拟化).
-const LOG_LINES: usize = 2000;
+pub(crate) const LOG_LINES: usize = 2000;
 
 impl MarinaWindow {
     pub(super) fn render_rescue_bar(
@@ -526,12 +526,31 @@ impl MarinaWindow {
             .child(list)
     }
 
+    /// Cache-only log tail: never read the log file on the render path.
+    fn cached_log_entries(
+        &self,
+        path: Option<&std::path::PathBuf>,
+    ) -> std::rc::Rc<Vec<dsh_marina::logs::LogEntry>> {
+        let Some(path) = path else {
+            return std::rc::Rc::new(Vec::new());
+        };
+        if let Some((cached_path, _, entries)) = self.logs_cache.borrow().as_ref()
+            && cached_path == path
+        {
+            return entries.clone();
+        }
+        std::rc::Rc::new(Vec::new())
+    }
+
     pub(super) fn render_logs_tab(&self, data: &DetailsData) -> Div {
-        let log_path = data.paths.as_ref().and_then(|p| latest_log(&p.marina));
-        let entries = log_path
+        // Path comes from the cache too: `latest_log` reads a directory and must
+        // not run on the render path.
+        let log_path = self
+            .logs_cache
+            .borrow()
             .as_ref()
-            .and_then(|path| tail(path, LOG_LINES).ok())
-            .unwrap_or_default();
+            .map(|(path, _, _)| path.clone());
+        let entries = self.cached_log_entries(log_path.as_ref());
 
         let head = div()
             .flex()
@@ -557,7 +576,6 @@ impl MarinaWindow {
 
         // Only the visible rows are laid out, so 2000 lines stay cheap (§9).
         let count = entries.len();
-        let entries = std::rc::Rc::new(entries);
         let rows = uniform_list("log-lines", count, move |range, _, _| {
             range
                 .filter_map(|index| entries.get(index))

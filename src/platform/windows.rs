@@ -311,6 +311,20 @@ pub fn total_physical_memory() -> u64 {
     }
 }
 
+/// Available physical RAM in bytes (0 if the query fails).
+pub fn available_physical_memory() -> u64 {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GlobalMemoryStatusEx(&mut status) }.is_ok() {
+        status.ullAvailPhys
+    } else {
+        0
+    }
+}
+
 fn wide_null(value: &str) -> Vec<u16> {
     OsStr::new(value)
         .encode_wide()

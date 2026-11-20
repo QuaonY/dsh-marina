@@ -75,16 +75,53 @@ impl OutputCapture {
     }
 
     fn drain_loop<R: std::io::Read>(self, reader: R) {
-        use std::io::{BufRead, Write};
+        use std::io::{BufRead, BufWriter, Write};
         const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
-        let mut log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_file)
-            .ok();
-        let mut written = 0u64;
+        // One write syscall per line contends with the UI for the disk, so a
+        // dedicated writer batches lines; it flushes on quiet periods so the
+        // log tail stays visible even when the instance goes silent.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(256);
+        let log_file = self.log_file.clone();
+        let writer = std::thread::Builder::new()
+            .name("dsh-log-writer".to_owned())
+            .spawn(move || {
+                let mut log = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_file)
+                    .ok()
+                    .map(BufWriter::new);
+                let mut written = 0u64;
+                let mut last_flush = std::time::Instant::now();
+                loop {
+                    match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                        Ok(line) => {
+                            if let Some(file) = log.as_mut()
+                                && written < MAX_LOG_BYTES
+                            {
+                                written += line.len() as u64 + 1;
+                                let _ = writeln!(file, "{line}");
+                                if last_flush.elapsed() >= std::time::Duration::from_millis(500) {
+                                    let _ = file.flush();
+                                    last_flush = std::time::Instant::now();
+                                }
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if let Some(file) = log.as_mut() {
+                                let _ = file.flush();
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                if let Some(file) = log.as_mut() {
+                    let _ = file.flush();
+                }
+            });
         let mut lines = std::io::BufReader::new(reader);
         let mut raw = Vec::new();
+        let mut logging = true;
         loop {
             raw.clear();
             match lines.read_until(b'\n', &mut raw) {
@@ -98,13 +135,13 @@ impl OutputCapture {
             {
                 self.endpoint.set(port);
             }
-            if let Some(file) = log.as_mut()
-                && written < MAX_LOG_BYTES
-            {
-                let redacted = crate::launch::redact_tokens(line);
-                written += redacted.len() as u64 + 1;
-                let _ = writeln!(file, "{redacted}");
+            if logging && tx.send(crate::launch::redact_tokens(line)).is_err() {
+                logging = false;
             }
+        }
+        drop(tx);
+        if let Ok(writer) = writer {
+            let _ = writer.join();
         }
     }
 }

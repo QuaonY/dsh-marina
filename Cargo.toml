@@ -15,6 +15,9 @@ default-run = "dsh-marina"
 members = ["xtask"]
 resolver = "3"
 
+[features]
+default = []
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

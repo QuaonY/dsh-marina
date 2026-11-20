@@ -599,6 +599,9 @@ struct NewInstanceDialog {
     clone_source: Option<String>,
     /// Chosen instance package and what it contains.
     import_file: Option<(PathBuf, Result<packs::PackManifest, String>)>,
+    /// Whether the package's DSH version is already installed; checked once
+    /// when the file is picked, not per render frame.
+    import_dsh_installed: bool,
     busy: bool,
 }
 
@@ -654,6 +657,11 @@ enum Dialog {
         instance_id: String,
         mode: storage::DeleteMode,
     },
+    /// Permanently remove one entry from Marina's 30-day trash.
+    PurgeTrash {
+        key: String,
+        name: String,
+    },
     CloneInstance {
         instance_id: String,
         name: Entity<InputState>,
@@ -677,6 +685,9 @@ enum Dialog {
     MarketInstall {
         index: usize,
         target: Option<String>,
+        /// Resolved DSH version per instance, computed in the background when
+        /// the dialog opens; `None` while that resolve is still running.
+        versions: Option<HashMap<String, Option<String>>>,
     },
     /// Quit while instances are running (§FR-2).
     Exit {
@@ -952,9 +963,28 @@ impl DownloadJob {
 }
 
 /// Main window model with reactive state.
+/// TTL cache of the details pane's disk reads (instance id, read-at, data).
+type DetailsCache =
+    std::cell::RefCell<Option<(String, std::time::Instant, crate::ui::DetailsData)>>;
+/// TTL cache of the log tail (path, read-at, lines).
+type LogsCache = std::cell::RefCell<
+    Option<(
+        PathBuf,
+        std::time::Instant,
+        std::rc::Rc<Vec<dsh_marina::logs::LogEntry>>,
+    )>,
+>;
+/// Background-warmed cache of offline installer paths (read-at, paths).
+type OfflineCache = std::cell::RefCell<Option<(std::time::Instant, Vec<PathBuf>)>>;
+/// Background-warmed runtime list for the settings page (read-at, runtimes).
+type RuntimesCache =
+    std::cell::RefCell<Option<(std::time::Instant, Vec<dsh_marina::runtimes::RuntimeInfo>)>>;
+
 struct MarinaWindow {
     state: Arc<AppState>,
     instances: Vec<InstanceConfig>,
+    /// Guards against out-of-order background instance-list refreshes.
+    instances_gen: std::cell::Cell<u64>,
     /// Last known process status per instance; refreshed without blocking the UI.
     statuses: HashMap<String, InstanceStatus>,
     /// Tracked by the root element, so Escape reaches every dialog.
@@ -992,6 +1022,27 @@ struct MarinaWindow {
     log_scroll: UniformListScrollHandle,
     /// Line count last shown, to follow new output only.
     log_seen: std::cell::Cell<usize>,
+    /// TTL cache of the details pane's disk reads so hover/scroll repaints
+    /// don't hit the filesystem every frame.
+    details_cache: DetailsCache,
+    /// TTL cache of the log tail (path, read-at, lines).
+    logs_cache: LogsCache,
+    /// A background details/log warm is in flight (dedupe spawns).
+    warming: std::cell::Cell<bool>,
+    /// In-memory settings snapshot; the settings render path must not read the
+    /// settings file per frame (disk I/O on the render path stalls under load).
+    settings_cache: std::cell::RefCell<dsh_marina::settings::MarinaSettings>,
+    offline_cache: OfflineCache,
+    offline_warming: std::cell::Cell<bool>,
+    /// Runtime list shown on the settings page; scanning runtimes and probing
+    /// the external install reads disk (and a multi-MB asar index), so the
+    /// render path only reads this background-warmed cache.
+    runtimes_cache: RuntimesCache,
+    runtimes_warming: std::cell::Cell<bool>,
+    /// Restorable trash entries shown in the settings page; listing walks each
+    /// kept `home/` for sizes, so the render path only reads this cache.
+    trash_cache: std::cell::RefCell<Option<Vec<storage::TrashEntry>>>,
+    trash_warming: std::cell::Cell<bool>,
     packs: PacksState,
     market: MarketState,
     /// "自定义下载链接" field in settings.
@@ -1011,6 +1062,7 @@ impl AssetSource for MarinaAssets {
         let extra: Option<&'static [u8]> = match path {
             "icons/download.svg" => Some(include_bytes!("../assets/icons/download.svg")),
             "icons/puzzle.svg" => Some(include_bytes!("../assets/icons/puzzle.svg")),
+            "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             _ => None,
         };
         match extra {
@@ -1051,6 +1103,8 @@ enum View {
     Market,
     /// Shared plugin packs (整合包): browse, download, reuse, share.
     Packs,
+    /// 回收站: restore or purge instances kept for 30 days after deletion.
+    Trash,
     InstanceDetails,
     GlobalSettings,
 }
@@ -1169,17 +1223,25 @@ impl MarinaWindow {
                     break;
                 };
                 let state = monitor_state.clone();
-                let (incoming, show_requested) = cx
+                let (incoming, show_requested, fleet_active) = cx
                     .background_executor()
                     .spawn(async move {
                         lifecycle::tick(&state, &ids);
+                        // Read the freshest running set here: the foreground
+                        // status snapshot is refreshed asynchronously.
+                        let active = !state
+                            .lifecycle
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .running
+                            .is_empty();
                         // A second launch on macOS asks the running instance to
                         // surface its window through a request file.
                         #[cfg(target_os = "macos")]
                         let show = platform::take_show_request(state.repository.data_root());
                         #[cfg(not(target_os = "macos"))]
                         let show = false;
-                        (poll_links(&state), show)
+                        (poll_links(&state), show, active)
                     })
                     .await;
                 let updated = this.update(cx, |this, cx| {
@@ -1202,12 +1264,7 @@ impl MarinaWindow {
                     cx.notify();
                     // Adaptive cadence: poll fast while anything is running or
                     // transitioning, slow down when the fleet is idle.
-                    this.instances.iter().any(|i| {
-                        matches!(
-                            this.statuses.get(&i.id),
-                            Some(InstanceStatus::Running | InstanceStatus::AdoptedRunning)
-                        )
-                    }) || !this.pending.is_empty()
+                    fleet_active || !this.pending.is_empty()
                 });
                 let Ok(active) = updated else {
                     break;
@@ -1222,9 +1279,11 @@ impl MarinaWindow {
         let focus = cx.focus_handle();
         // 根元素持有键盘焦点，Escape 等按键才能沿元素树冒泡上来。
         window.focus(&focus, cx);
+        let settings_snapshot = state.settings_store.load().unwrap_or_default();
         let mut window = Self {
             state: state.clone(),
             instances,
+            instances_gen: std::cell::Cell::new(0),
             statuses: HashMap::new(),
             focus,
             pending: HashMap::new(),
@@ -1250,6 +1309,16 @@ impl MarinaWindow {
             copy_job: None,
             log_scroll: UniformListScrollHandle::new(),
             log_seen: std::cell::Cell::new(0),
+            details_cache: std::cell::RefCell::new(None),
+            logs_cache: std::cell::RefCell::new(None),
+            warming: std::cell::Cell::new(false),
+            settings_cache: std::cell::RefCell::new(settings_snapshot),
+            offline_cache: std::cell::RefCell::new(None),
+            offline_warming: std::cell::Cell::new(false),
+            runtimes_cache: std::cell::RefCell::new(None),
+            runtimes_warming: std::cell::Cell::new(false),
+            trash_cache: std::cell::RefCell::new(None),
+            trash_warming: std::cell::Cell::new(false),
             packs: PacksState::default(),
             market: MarketState::default(),
             custom_link_input,
@@ -1282,13 +1351,49 @@ impl MarinaWindow {
         self.check_app_update(true, cx);
     }
 
+    /// Drop the settings-page runtime list so the next render re-warms it
+    /// (after a runtime was installed, removed or rebound).
+    fn invalidate_runtimes_cache(&self) {
+        self.runtimes_cache.borrow_mut().take();
+    }
+
+    /// Drop details/log data after an operation changed it; the next render
+    /// re-warms it.  The monitor must NOT do this every tick: while the
+    /// details view is open it forced a full re-read plus an extra repaint
+    /// every 2 seconds.  Freshness while idle is handled by the cache TTL.
+    fn invalidate_details_cache(&self) {
+        self.details_cache.borrow_mut().take();
+        self.logs_cache.borrow_mut().take();
+    }
+
+    /// Reload the instance list off the UI thread (reading every config TOML
+    /// synchronously here stalled the frame), then refresh statuses and tray.
     fn refresh_instances(&mut self, cx: &mut Context<Self>) {
-        self.instances = self.state.repository.list().unwrap_or_else(|e| {
-            dsh_marina::applog::warn(&format!("刷新实例列表失败：{e}"));
-            Vec::new()
-        });
-        self.refresh_statuses();
-        self.update_tray_icon(cx);
+        let generation = self.instances_gen.get() + 1;
+        self.instances_gen.set(generation);
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            let instances = cx
+                .background_executor()
+                .spawn(async move {
+                    state.repository.list().unwrap_or_else(|e| {
+                        dsh_marina::applog::warn(&format!("刷新实例列表失败：{e}"));
+                        Vec::new()
+                    })
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // A newer refresh may have completed first; keep its list.
+                if this.instances_gen.get() != generation {
+                    return;
+                }
+                this.instances = instances;
+                this.refresh_statuses();
+                this.update_tray_icon(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Statuses come from the background monitor's last tick, so this never
@@ -1558,6 +1663,8 @@ impl MarinaWindow {
                     Ok(_) => {}
                     Err(e) => this.last_error = Some(e),
                 }
+                this.invalidate_runtimes_cache();
+                this.invalidate_details_cache();
                 this.refresh_instances(cx);
                 cx.notify();
             });
@@ -1901,8 +2008,9 @@ impl MarinaWindow {
                         if let Some(path) = outcome.exported_to {
                             message.push_str(&format!("；备份已导出到 {}", path.display()));
                         }
-                        if let Some(path) = outcome.kept_at {
-                            message.push_str(&format!("; data retained at {}", path.display()));
+                        if outcome.kept_at.is_some() {
+                            message.push_str("；数据已保留 30 天，可在侧边栏「回收站」恢复");
+                            this.trash_cache.borrow_mut().take();
                         }
                         this.last_success = Some(message);
                     }
@@ -2618,10 +2726,14 @@ impl MarinaWindow {
                     None,
                     cx,
                 );
-                store.save(&settings).map_err(|e| e.to_string())
+                store.save(&settings).map_err(|e| e.to_string())?;
+                Ok(settings)
             });
         let saved = match result {
-            Ok(()) => true,
+            Ok(settings) => {
+                *self.settings_cache.borrow_mut() = settings;
+                true
+            }
             Err(e) => {
                 self.last_error = Some(format!("保存设置失败：{e}"));
                 false
@@ -3289,6 +3401,18 @@ impl MarinaWindow {
         if let Some(job) = self.download.jobs.iter().find(|job| job.key == key) {
             job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        if key.starts_with("marina:") {
+            // 更新下载的 worker 可能正阻塞在网络 I/O，无法立刻响应取消标志；
+            // 立即把任务从列表移除，保证 UI 与重试不被残留任务卡住。
+            self.finish_job(key, cx);
+            if let Some(Dialog::Update {
+                downloading, error, ..
+            }) = self.dialog.as_mut()
+            {
+                *downloading = false;
+                *error = None;
+            }
+        }
         cx.notify();
     }
 
@@ -3358,6 +3482,7 @@ impl MarinaWindow {
                     Ok(runtime) => {
                         this.last_success = Some(format!("DSH {} 已安装", runtime.version));
                         lifecycle::invalidate_disk_usage(&this.state);
+                        this.invalidate_runtimes_cache();
                         this.mark_version_installed(&runtime.version);
                         this.suggest_runtime_cleanup(cx);
                     }
@@ -3576,11 +3701,16 @@ impl MarinaWindow {
             return;
         };
         let version = version.to_owned();
+        let downloading = self
+            .download
+            .jobs
+            .iter()
+            .any(|job| job.key == format!("marina:{version}"));
         self.notices.panel_open = false;
         self.dialog = Some(Dialog::Update {
             version,
             release,
-            downloading: false,
+            downloading,
             error: None,
         });
         cx.notify();
@@ -3604,6 +3734,7 @@ impl MarinaWindow {
         }
         cx.notify();
         let cancel_for_check = cancel.clone();
+        let worker_cancel = cancel.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -3615,14 +3746,26 @@ impl MarinaWindow {
                             *slot = (downloaded, total.unwrap_or(0));
                         }
                     };
-                    let bytes = dsh_marina::selfupdate::download(&update, &mut report)?;
+                    let bytes =
+                        dsh_marina::selfupdate::download(&update, &mut report, &worker_cancel)?;
                     let pending =
                         dsh_marina::selfupdate::stage_pending(&data_root, &update, &bytes)?;
                     Ok::<PathBuf, String>(pending.package_path(&data_root))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_job(&key, cx);
+                // 只清理「自己这一代」的任务：取消后可能已立即移除并重新开始，
+                // 旧 worker 迟到回来时不能误删新任务。
+                let same_job = this
+                    .download
+                    .jobs
+                    .iter()
+                    .find(|job| job.key == key)
+                    .is_some_and(|job| Arc::ptr_eq(&job.cancel, &cancel_for_check));
+                if same_job {
+                    this.finish_job(&key, cx);
+                }
+                let no_active_job = !this.download.jobs.iter().any(|job| job.key == key);
                 match result {
                     Ok(path) => {
                         let cancelled = cancel_for_check.load(std::sync::atomic::Ordering::Relaxed);
@@ -3640,13 +3783,28 @@ impl MarinaWindow {
                         dsh_marina::applog::info("[Update] 新版本已下载并通过 SHA-256 校验");
                     }
                     Err(e) => {
-                        dsh_marina::applog::warn(&format!("[Update] 下载更新失败：{e}"));
-                        if let Some(Dialog::Update {
-                            downloading, error, ..
-                        }) = this.dialog.as_mut()
-                        {
-                            *downloading = false;
-                            *error = Some(e);
+                        let cancelled = cancel_for_check.load(std::sync::atomic::Ordering::Relaxed);
+                        if cancelled {
+                            dsh_marina::applog::info("[Update] 用户取消了更新下载");
+                            if no_active_job
+                                && let Some(Dialog::Update {
+                                    downloading, error, ..
+                                }) = this.dialog.as_mut()
+                            {
+                                *downloading = false;
+                                *error = None;
+                            }
+                        } else {
+                            dsh_marina::applog::warn(&format!("[Update] 下载更新失败：{e}"));
+                            if let Some(Dialog::Update {
+                                downloading, error, ..
+                            }) = this.dialog.as_mut()
+                            {
+                                *downloading = false;
+                                *error = Some(e);
+                            } else {
+                                this.push_notice(true, format!("更新下载失败：{e}"), cx);
+                            }
                         }
                     }
                 }
@@ -3786,6 +3944,7 @@ impl MarinaWindow {
                     Ok(runtime) => {
                         this.last_success = Some(format!("已从离线包安装 DSH {}", runtime.version));
                         lifecycle::invalidate_disk_usage(&this.state);
+                        this.invalidate_runtimes_cache();
                         this.suggest_runtime_cleanup(cx);
                     }
                     Err(e) => this.last_error = Some(format!("离线安装失败：{e}")),
@@ -4372,6 +4531,7 @@ impl MarinaWindow {
                 .clone()
                 .or_else(|| self.instances.first().map(|i| i.id.clone())),
             import_file: None,
+            import_dsh_installed: false,
             busy: false,
         }));
         self.list_versions(cx);
@@ -4664,6 +4824,7 @@ impl MarinaWindow {
             Some(Dialog::NewInstance(dialog)) => dialog.name.clone(),
             _ => return,
         };
+        let state = self.state.clone();
         let task = cx.background_executor().spawn(async move {
             let path = rfd::FileDialog::new()
                 .set_title("选择整合包")
@@ -4671,11 +4832,20 @@ impl MarinaWindow {
                 .add_filter("Marina 整合包", &["zip"])
                 .pick_file()?;
             let manifest = packs::preview_pack(&path).map_err(|e| e.to_string());
-            Some((path, manifest))
+            let installed = manifest.as_ref().is_ok_and(|m| {
+                !m.dsh_version.is_empty()
+                    && state
+                        .registry
+                        .scan()
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|r| r.version == m.dsh_version)
+            });
+            Some((path, manifest, installed))
         });
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let Some((path, manifest)) = task.await else {
+            let Some((path, manifest, installed)) = task.await else {
                 return;
             };
             let _ = cx.update_window(window_handle, |_, window, cx| {
@@ -4691,6 +4861,7 @@ impl MarinaWindow {
                         name_input.update(cx, |input, cx| input.set_value(name, window, cx));
                     }
                     dialog.import_file = Some((path, manifest));
+                    dialog.import_dsh_installed = installed;
                     dialog.error = None;
                     cx.notify();
                 });

@@ -6,6 +6,24 @@ section; the release pipeline extracts the matching section as the Release body 
 每个版本的变更都记录在此，最新在前。每次发版追加一节；发布流水线自动抽取对应版本章节作为
 Release 说明与更新弹窗内容。
 
+## 0.1.4
+
+This release makes deleted-instance data recoverable, steadies the frame rate, and refreshes the look.
+
+- Restorable trash: deleting with "keep data" now keeps a recoverable copy for 30 days. A new "Trash" entry at the bottom of the sidebar (with a count badge) opens a dedicated page where kept instances can be restored or permanently deleted. Restore rebuilds the instance with its home data and configuration.
+- Steadier frame rate: per-frame and periodic overhead was trimmed, markedly reducing stutter and large frame-rate swings across all screens.
+- The sidebar memory gauge now shows real whole-system memory usage (used / total) instead of only the running-instance sum, so it no longer reads a misleading 0 when idle; a sub-line shows how much of that is your instances.
+- Refined light and dark palettes for better card depth and text contrast, improving overall display quality.
+
+中文
+
+本版让「保留数据后删除」的实例可以恢复，显著稳定帧率，并微调了整体观感。
+
+- 可恢复的回收站：选择「保留数据后删除」的实例会保留 30 天可恢复副本。侧边栏底部新增「回收站」入口（带数量徽标），打开独立页面可恢复或彻底删除。恢复会重建实例并放回 home 数据与配置。
+- 帧率更稳：并精简每帧与周期性开销，各界面的卡顿与帧率大幅波动明显减少。
+- 侧边栏内存栏改为显示整机真实内存占用（已用 / 总量），不再只统计运行中实例、空闲时误显 0；下方小字标出其中实例占用。
+- 微调浅色 / 深色配色，提升卡片层次与文字对比度，优化显示效果。
+
 ## 0.1.3
 
 This release adds a home dashboard, batch controls and download pause/resume.

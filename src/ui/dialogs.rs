@@ -471,7 +471,7 @@ impl MarinaWindow {
             Dialog::CopyPlugins { source_id, target } => {
                 self.render_copy_plugins_dialog(source_id.clone(), target.clone(), cx)
             }
-            Dialog::MarketInstall { index, target } => self.render_market_install_dialog(*index, target.clone(), cx)?,
+            Dialog::MarketInstall { index, target, versions } => self.render_market_install_dialog(*index, target.clone(), versions.as_ref(), cx)?,
             Dialog::Exit { running } => dialog_shell(
                 "退出 DSH Marina",
                 t!(TEXT),
@@ -608,6 +608,25 @@ impl MarinaWindow {
                         cx.listener(move |this, _, _, cx| {
                             this.dialog = None;
                             this.delete_runtime(runtime_id.clone(), cx);
+                        }),
+                    )),
+                )
+            }
+            Dialog::PurgeTrash { key, name } => {
+                let key = key.clone();
+                dialog_shell(
+                    "彻底删除",
+                    t!(DANGER),
+                    520.,
+                    body().child(paragraph(format!(
+                        "确定要彻底删除「{name}」保留的数据吗？此操作无法撤销，home 数据将被永久移除。"
+                    ))),
+                    div().child(self.cancel_button(cx)).child(clickable(
+                        btn("彻底删除", Tone::Danger, false),
+                        true,
+                        cx.listener(move |this, _, _, cx| {
+                            this.dialog = None;
+                            this.purge_trash_entry(key.clone(), cx);
                         }),
                     )),
                 )
@@ -923,6 +942,19 @@ impl MarinaWindow {
             release.body.trim().to_owned()
         };
         let project_url = release.html_url.clone();
+        let job_key = format!("marina:{version}");
+        let (done, total) = self
+            .download
+            .jobs
+            .iter()
+            .find(|job| job.key == job_key)
+            .map(|job| job.amounts())
+            .unwrap_or((0, 0));
+        let ratio = if total > 0 {
+            (done as f32 / total as f32).clamp(0., 1.)
+        } else {
+            0.
+        };
         let submit = clickable(
             btn(
                 if downloading {
@@ -1026,8 +1058,66 @@ impl MarinaWindow {
                 ))
                 .when_some(error.map(str::to_owned), |el, error| {
                     el.child(error_text(error))
+                })
+                .when(downloading, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .h(px(8.))
+                                    .w_full()
+                                    .rounded(px(4.))
+                                    .bg(rgb(t!(BG_ELEVATED)))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .rounded(px(4.))
+                                            .bg(rgb(t!(PRIMARY)))
+                                            .w(relative(ratio)),
+                                    ),
+                            )
+                            .child(hint(format!(
+                                "已下载 {} / {} · {:.0}%",
+                                storage::format_bytes(done),
+                                storage::format_bytes(total),
+                                ratio * 100.
+                            ))),
+                    )
                 }),
-            div().child(self.cancel_button(cx)).child(submit),
+            div()
+                .when(downloading, |el| {
+                    el.child(clickable(
+                        btn("取消下载", Tone::Default, false),
+                        true,
+                        cx.listener(move |this, _, _, cx| {
+                            this.cancel_job(&job_key, cx);
+                            if let Some(Dialog::Update {
+                                downloading, error, ..
+                            }) = this.dialog.as_mut()
+                            {
+                                *downloading = false;
+                                *error = None;
+                            }
+                            cx.notify();
+                        }),
+                    ))
+                })
+                .child(if downloading {
+                    clickable(
+                        btn("后台下载", Tone::Default, false),
+                        true,
+                        cx.listener(|this, _, _, cx| {
+                            this.dialog = None;
+                            cx.notify();
+                        }),
+                    )
+                } else {
+                    self.cancel_button(cx)
+                })
+                .child(submit),
         )
     }
 
@@ -1280,6 +1370,7 @@ impl MarinaWindow {
         &self,
         index: usize,
         target: Option<String>,
+        versions: Option<&HashMap<String, Option<String>>>,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let plugin = self.market_plugin(index)?.clone();
@@ -1292,11 +1383,14 @@ impl MarinaWindow {
                 .installed
                 .get(&instance.id)
                 .is_some_and(|n| n.contains(&plugin.name));
-            let version = self.instance_dsh_version(instance);
+            let version = versions
+                .and_then(|map| map.get(&instance.id).cloned())
+                .flatten();
             let compatible = version.as_deref().is_none_or(|v| plugin.supports(v));
-            let mut desc = match &version {
-                Some(v) => format!("DSH {v}"),
-                None => "DSH 版本未安装".to_owned(),
+            let mut desc = match (&version, versions) {
+                (Some(v), _) => format!("DSH {v}"),
+                (None, Some(_)) => "DSH 版本未安装".to_owned(),
+                (None, None) => "正在检测 DSH 版本…".to_owned(),
             };
             if installed {
                 desc.push_str(" · 已装过，再装会更新到这个版本");
@@ -1563,14 +1657,8 @@ impl MarinaWindow {
                         .child(error_text(format!("不是有效的整合包：{e}"))),
                     Some((path, Ok(manifest))) => {
                         let enabled = manifest.plugins.iter().filter(|p| p.enabled).count();
-                        let installed = !manifest.dsh_version.is_empty()
-                            && self
-                                .state
-                                .registry
-                                .scan()
-                                .unwrap_or_default()
-                                .iter()
-                                .any(|r| r.version == manifest.dsh_version);
+                        let installed =
+                            !manifest.dsh_version.is_empty() && dialog.import_dsh_installed;
                         let version_note = if manifest.dsh_version.is_empty() {
                             "跟随最新稳定版".to_owned()
                         } else if installed {
@@ -3250,7 +3338,7 @@ impl MarinaWindow {
             (
                 DeleteMode::KeepData,
                 "保留数据后删除",
-                "home/ 目录移到 Marina 回收目录保留 30 天，其余删除",
+                "home/ 数据保留 30 天，可在侧边栏「回收站」恢复，其余删除",
             ),
             (DeleteMode::Direct, "直接删除", "全部移到系统回收站"),
         ];

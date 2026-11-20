@@ -199,11 +199,20 @@ fn process_tree(root_process_id: u32) -> Result<Vec<TreeEntry>, ProcessError> {
 
     Ok(entries
         .into_iter()
-        .map(|(process_id, parent_process_id, _)| TreeEntry {
-            process_id,
-            parent_process_id,
-            memory_bytes: process_memory(process_id),
-            in_tree: members.contains(&process_id),
+        .map(|(process_id, parent_process_id, _)| {
+            let in_tree = members.contains(&process_id);
+            TreeEntry {
+                process_id,
+                parent_process_id,
+                // Only members need memory: querying every process in the
+                // system snapshot costs hundreds of syscalls per monitor tick.
+                memory_bytes: if in_tree {
+                    process_memory(process_id)
+                } else {
+                    0
+                },
+                in_tree,
+            }
         })
         .collect())
 }
@@ -1193,6 +1202,76 @@ mod tests {
         assert_eq!(
             manager.status("instance-one").unwrap(),
             InstanceProcessStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn flushes_the_log_tail_while_the_instance_stays_silent() {
+        let system_root = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
+        let executable = std::path::PathBuf::from(system_root)
+            .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+        let directory = tempfile::tempdir().unwrap();
+        let log_file = directory.path().join("stdout.log");
+        let endpoint = crate::health::WebEndpoint::default();
+        let spec = LaunchSpec {
+            working_directory: executable.parent().unwrap().to_path_buf(),
+            executable,
+            arguments: vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                "[Console]::Out.WriteLine('dsh web: http://127.0.0.1:43211/?token=secret'); Start-Sleep -Seconds 15".into(),
+            ],
+            environment: Vec::new(),
+            environment_to_remove: Vec::new(),
+            diagnostic_file: std::path::PathBuf::new(),
+        };
+        let mut manager = InstanceProcessManager::default();
+        manager
+            .start_captured(
+                "instance-one",
+                &spec,
+                Some(OutputCapture {
+                    log_file: log_file.clone(),
+                    endpoint: endpoint.clone(),
+                }),
+            )
+            .unwrap();
+        // The line must reach the file while the process is alive and silent:
+        // the writer flushes on quiet periods, not only when output resumes.
+        let mut flushed_while_running = false;
+        for _ in 0..600 {
+            if std::fs::read_to_string(&log_file)
+                .unwrap_or_default()
+                .contains("dsh web:")
+            {
+                flushed_while_running = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(flushed_while_running, "log tail never flushed while silent");
+        assert!(matches!(
+            manager.status("instance-one").unwrap(),
+            InstanceProcessStatus::Running { .. }
+        ));
+        let _ = manager.stop("instance-one", Duration::from_millis(10));
+    }
+
+    #[test]
+    fn process_tree_queries_memory_only_for_tree_members() {
+        let tree = process_tree(std::process::id()).unwrap();
+        let root = tree
+            .iter()
+            .find(|entry| entry.process_id == std::process::id())
+            .expect("the current process is in its own tree");
+        assert!(root.in_tree);
+        assert!(root.memory_bytes > 0);
+        // Unrelated processes must not be opened for memory accounting.
+        assert!(tree.iter().any(|entry| !entry.in_tree));
+        assert!(
+            tree.iter()
+                .all(|entry| entry.in_tree || entry.memory_bytes == 0)
         );
     }
 }

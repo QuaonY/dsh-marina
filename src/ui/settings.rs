@@ -6,15 +6,9 @@ use dsh_marina::settings::MarinaSettings;
 
 impl MarinaWindow {
     pub(super) fn render_global_settings(&self, cx: &mut Context<Self>) -> Div {
-        let settings = match self.state.settings_store.load() {
-            Ok(settings) => settings,
-            Err(e) => {
-                return div()
-                    .flex_1()
-                    .p(px(32.))
-                    .child(note(format!("无法读取设置：{e}")));
-            }
-        };
+        // In-memory snapshot: reading the settings file per frame put disk I/O
+        // on the render path and stalled the UI under disk load.
+        let settings = self.settings_cache.borrow().clone();
 
         let toggle = |this_flag: bool, apply: fn(&mut MarinaSettings), cx: &mut Context<Self>| {
             clickable(
@@ -89,12 +83,7 @@ impl MarinaWindow {
                 ),
             ));
 
-        let runtime_settings = self.state.runtime_store.load().unwrap_or_default();
-        let runtimes = self
-            .state
-            .registry
-            .all(&runtime_settings)
-            .unwrap_or_default();
+        let runtimes = self.cached_runtimes(cx);
         let newest_managed = runtimes
             .iter()
             .find(|r| !r.is_external())
@@ -256,7 +245,7 @@ impl MarinaWindow {
             }
         }
 
-        let offline = dsh_marina::download::offline_installers(&self.state.registry);
+        let offline = self.cached_offline_installers(cx);
         let offline_rows = offline
             .into_iter()
             .map(|installer| {
@@ -826,6 +815,78 @@ impl MarinaWindow {
         }
     }
 
+    /// The runtime list scans directories and probes the external install
+    /// (multi-MB asar index); keep that off the render path and serve a
+    /// background-warmed cache, refreshed at most every 5 seconds.
+    fn cached_runtimes(&self, cx: &mut Context<Self>) -> Vec<dsh_marina::runtimes::RuntimeInfo> {
+        let stale = self
+            .runtimes_cache
+            .borrow()
+            .as_ref()
+            .map(|(at, _)| at.elapsed() > std::time::Duration::from_secs(5))
+            .unwrap_or(true);
+        if stale && !self.runtimes_warming.get() {
+            self.runtimes_warming.set(true);
+            let state = self.state.clone();
+            cx.spawn(async move |this, cx| {
+                let list = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let settings = state.runtime_store.load().unwrap_or_default();
+                        state.registry.all(&settings).unwrap_or_default()
+                    })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.runtimes_cache
+                        .borrow_mut()
+                        .replace((std::time::Instant::now(), list));
+                    this.runtimes_warming.set(false);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        self.runtimes_cache
+            .borrow()
+            .as_ref()
+            .map(|(_, list)| list.clone())
+            .unwrap_or_default()
+    }
+
+    /// Offline installers are discovered by reading the runtimes directory; do
+    /// that on a background task and serve the cached list on the render path.
+    fn cached_offline_installers(&self, cx: &mut Context<Self>) -> Vec<std::path::PathBuf> {
+        let stale = self
+            .offline_cache
+            .borrow()
+            .as_ref()
+            .map(|(at, _)| at.elapsed() > std::time::Duration::from_secs(5))
+            .unwrap_or(true);
+        if stale && !self.offline_warming.get() {
+            self.offline_warming.set(true);
+            let registry = self.state.registry.clone();
+            cx.spawn(async move |this, cx| {
+                let list = cx
+                    .background_executor()
+                    .spawn(async move { dsh_marina::download::offline_installers(&registry) })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.offline_cache
+                        .borrow_mut()
+                        .replace((std::time::Instant::now(), list));
+                    this.offline_warming.set(false);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        self.offline_cache
+            .borrow()
+            .as_ref()
+            .map(|(_, list)| list.clone())
+            .unwrap_or_default()
+    }
+
     fn render_download_row(
         &self,
         runtimes: &[dsh_marina::runtimes::RuntimeInfo],
@@ -972,8 +1033,11 @@ impl MarinaWindow {
 pub(crate) const THIRD_PARTY_LICENSES: &str = include_str!("../../assets/THIRD-PARTY-LICENSES.txt");
 
 fn license_count() -> usize {
-    THIRD_PARTY_LICENSES
-        .lines()
-        .filter(|line| line.starts_with("  "))
-        .count()
+    static COUNT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *COUNT.get_or_init(|| {
+        THIRD_PARTY_LICENSES
+            .lines()
+            .filter(|line| line.starts_with("  "))
+            .count()
+    })
 }
