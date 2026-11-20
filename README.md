@@ -63,13 +63,7 @@ menu entry, and lands under "Apps and features".
 ### macOS
 
 1. Download `dsh-marina-v<version>-macos-aarch64.dmg`, open it, and drag **DSH Marina** into
-   Applications; or use Homebrew:
-
-   ```bash
-   brew tap QuaonY/dsh-marina
-   brew install --cask dsh-marina
-   ```
-
+   Applications.
 2. **First launch (important):** Marina uses free ad-hoc signing (no Apple Developer account), so
    macOS blocks the un-notarized app. If the first open says the developer cannot be verified, go
    to **System Settings → Privacy & Security**, click **"Open Anyway"** near the bottom, and enter
@@ -326,7 +320,7 @@ src/ui/         GPUI views, dialogs, and tab pages
 src/bin/        fake-desktop test double used by the integration tests
 tests/          process lifecycle integration tests
 xtask/          all-Rust release orchestration (package, SHA-256, manifest)
-packaging/      distribution material such as the Homebrew Cask template
+packaging/      distribution material such as the NSIS installer template
 assets/         logo, icons, screenshots, and the third-party license list
 CHANGELOG.md    cumulative bilingual changelog (one section per release)
 ```

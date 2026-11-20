@@ -57,13 +57,7 @@ Marina 是独立的启动器，而不是 DSH 的分支：它使用隔离的路�
 
 ### macOS
 
-1. 下载 `dsh-marina-v<版本>-macos-aarch64.dmg`，打开后把 **DSH Marina** 拖进「应用程序」；或用 Homebrew：
-
-   ```bash
-   brew tap QuaonY/dsh-marina
-   brew install --cask dsh-marina
-   ```
-
+1. 下载 `dsh-marina-v<版本>-macos-aarch64.dmg`，打开后把 **DSH Marina** 拖进「应用程序」。
 2. **首次放行（重要）**：Marina 采用免费的 ad-hoc 签名（没有 Apple Developer 账号），macOS 会拦截未公证的应用。第一次打开时若提示「无法验证开发者」，前往 **系统设置 → 隐私与安全性**，在下方点 **「仍要打开」** 并输入密码即可。之后正常双击启动。
 3. 新建实例并启动。
 
@@ -264,7 +258,7 @@ src/ui/         GPUI 视图、对话框和标签页
 src/bin/        集成测试使用的 fake-desktop 测试替身
 tests/          进程生命周期集成测试
 xtask/          全 Rust 发布编排（打包、SHA-256、清单组装）
-packaging/      Homebrew Cask 模板等分发物料
+packaging/      NSIS 安装器模板等分发物料
 assets/         图标、Logo、截图和第三方许可清单
 CHANGELOG.md    累计式双语更新日志（每版本一节）
 ```
