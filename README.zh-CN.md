@@ -5,9 +5,9 @@
 <h1 align="center">DSH Marina</h1>
 
 <p align="center">
-  一个用于并排运行多个相互隔离的
+  一个用 Rust 开发的高性能桌面启动器，用于并排运行多个相互隔离的
   <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness（DSH）</a>
-  工作区的 Windows 与 macOS 桌面启动器。
+  工作区（Windows 与 macOS）。
 </p>
 
 <p align="center">

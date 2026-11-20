@@ -5,9 +5,9 @@
 <h1 align="center">DSH Marina</h1>
 
 <p align="center">
-  A Windows and macOS desktop launcher for running isolated
+  A high-performance desktop launcher built with Rust for running isolated
   <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness (DSH)</a>
-  workspaces side by side.
+  workspaces side by side on Windows and macOS.
 </p>
 
 <p align="center">
